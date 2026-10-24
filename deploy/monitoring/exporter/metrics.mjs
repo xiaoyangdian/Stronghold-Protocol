@@ -2,9 +2,11 @@
 const numeric = (v) => typeof v === 'number' && Number.isFinite(v);
 const escape = (v) => String(v).replaceAll('\\', '\\\\').replaceAll('\n', '\\n').replaceAll('"', '\\"');
 const pathValue = (obj, path) => path.split('.').reduce((v, key) => v?.[key], obj);
-const messageTypes = new Set(['invalid', 'hello', 'ping', 'g.ready', 'g.rerollVote', 'g.chat', 'g.move', 'g.buy', 'g.sell', 'g.equip', 'g.refresh',
-  'g.levelUp', 'g.freeze', 'g.choice', 'g.band', 'g.bandSkip', 'g.bandFocus', 'g.infoReady', 'g.reward', 'g.unitStats', 'g.watch',
-  'g.leave', 'g.pause', 'g.autoplay', 'g.console', 'g.destroy', 'g.art', 'g.emote', 'b.result', 'b.progress', 'b.rehearsalResult',
+// Every C2S type shared/protocol.js declares, so no handler's latency is dropped from the label set (a metric this list
+// has never heard of is not exported at all). Bounded by construction: these are protocol constants, never client text.
+const messageTypes = new Set(['invalid', 'hello', 'ping', 'g.ready', 'g.rerollVote', 'g.chat', 'g.move', 'g.buy', 'g.sell', 'g.equip', 'g.unequip', 'g.refresh',
+  'g.levelUp', 'g.freeze', 'g.choice', 'g.offer', 'g.offerRefresh', 'g.band', 'g.bandSkip', 'g.bandFocus', 'g.infoReady', 'g.reward', 'g.unitStats', 'g.watch',
+  'g.leave', 'g.pause', 'g.autoplay', 'g.console', 'g.test', 'g.destroy', 'g.art', 'g.emote', 'b.result', 'b.progress', 'b.rehearsalResult',
   'room.create', 'room.join', 'room.leave', 'room.ready', 'room.start', 'room.setDifficulty', 'room.setAiPicksLast', 'room.rerollSetup', 'room.cancelReroll', 'room.addBot',
   'room.removeBot', 'room.kick', 'room.loadout', 'room.skins', 'room.card', 'room.setPlugins', 'room.setMode', 'room.contentReady', 'room.consent', 'room.ownership', 'room.diy', 'room.spectate',
   'room.removeSpectator', 'room.console.enable', 'room.console.disable', 'match.join', 'match.leave', 'state.resync']);

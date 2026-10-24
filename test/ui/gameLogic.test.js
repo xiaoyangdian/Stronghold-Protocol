@@ -708,7 +708,25 @@ describe('keyboard & settings', () => {
   test('sanitizeSettings', () => {
     assert.deepEqual(sanitizeSettings(null), { ...DEFAULT_SETTINGS });
     assert.deepEqual(sanitizeSettings({ bgm: 3, sfx: -1, voice: 2, muted: 'yes', damageNumbers: false, quality: 'ultra' }),
-      { bgm: 1, sfx: 0, voice: 1, voiceLang: 'cn', voiceNative: false, mysticEnergy: false, officialFx: 'auto', voiceOverrides: {}, textSize: 'sm', muted: false, damageNumbers: false, officialDamageNumbers: false, ammoCount: false, deploymentZoom: false, quality: 'high', fpsLimit: 0, skinsEnabled: false, preload: false, preloadOptional: false, preloadVoiceLang: ['cn'], preloadSkins: false });
+      { bgm: 1, sfx: 0, voice: 1, voiceLang: 'cn', voiceNative: false, voiceOverrides: {}, muted: false, damageNumbers: false, officialDamageNumbers: false, ammoEnergyCount: false, combatMetrics: false, prepDeployFold: true, quality: 'high', fpsLimit: 0, officialFx: 'auto', otherSkins: true, skinsEnabled: false, textSize: 'sm', preload: false, preloadOptional: false, preloadVoiceLang: ['cn'], preloadSkins: false });
+    // 显示其他玩家的皮肤 (docs/SKINS.md): on by default, and off only when the profile says so
+    assert.equal(DEFAULT_SETTINGS.otherSkins, true);
+    assert.equal(sanitizeSettings({ bgm: 0.5 }).otherSkins, true, 'a profile saved before the switch draws other players\' skins');
+    assert.equal(sanitizeSettings({ otherSkins: false }).otherSkins, false);
+    assert.equal(sanitizeSettings({ otherSkins: 'no' }).otherSkins, true, 'only `false` turns it off (the renderer reads it the same way)');
+    // 本分支的皮肤总开关：默认关，只有 true 打开
+    assert.equal(DEFAULT_SETTINGS.skinsEnabled, false);
+    assert.equal(sanitizeSettings({ skinsEnabled: true }).skinsEnabled, true);
+    assert.equal(sanitizeSettings({ skinsEnabled: 'yes' }).skinsEnabled, false);
+    // 部署时收起商店（GitHub #602）默认开，只有显式 false 关掉
+    assert.equal(sanitizeSettings({ prepDeployFold: false }).prepDeployFold, false);
+    assert.equal(sanitizeSettings({}).prepDeployFold, true);
+    // 旧键迁移：弹药数量 / 秘术师能量 → 显示弹药与能量数量
+    assert.equal(sanitizeSettings({ ammoCount: true }).ammoEnergyCount, true);
+    assert.equal(sanitizeSettings({ mysticEnergy: true }).ammoEnergyCount, true);
+    assert.equal(sanitizeSettings({ ammoCount: true, ammoEnergyCount: false }).ammoEnergyCount, false);
+    assert.equal('ammoCount' in sanitizeSettings({ ammoCount: true }), false, 'retired keys are never written back');
+    assert.equal('mysticEnergy' in sanitizeSettings({ mysticEnergy: true }), false, 'retired keys are never written back');
     assert.equal(sanitizeSettings({ bgm: 0.5 }).voice, DEFAULT_SETTINGS.voice, 'a saved profile without `voice` gets the default');
     // 语音语言: 中文 by default. en / kr are dubs (0.3.0); anything else, including the per-operator 'native', stays 中文.
     assert.equal(DEFAULT_SETTINGS.voiceLang, 'cn');

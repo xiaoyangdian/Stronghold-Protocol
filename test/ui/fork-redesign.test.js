@@ -126,7 +126,7 @@ test('loadout deck quick choices reuse the existing skill/module handler and do 
   assert.equal(pick, chess.chessId);
   assert.equal(JSON.stringify(loadoutStore.get()), before);
   const source = read('public/js/screens/loadout.js');
-  assert.match(source, /<\$\{SkinSection\} chess=\$\{chess\}/);
+  assert.match(source, /<\$\{SkinSection\} charId=\$\{chess\.charId\}/);
   assert.match(source, /<\$\{OperatorVoice\}/);
   assert.match(source, /utility=\$\{true\} class="loadout-io-modal"/);
   assert.doesNotMatch(source, /skinsStore|setSkins|ItemCodex|ItemDetail/);
@@ -154,7 +154,12 @@ test('battle/settlement decoration reads authoritative facts and does not invent
     assert.doesNotMatch(code, /from ['\"](?:.*\/)?(?:accounts|friends|cloudStats|federation|randomMode|namecards|trophies)\.js/);
     for (const [, type] of code.matchAll(/net\.request\('([^']+)'/g)) assert.ok(Object.hasOwn(C2S, type), `${file}: ${type}`);
   }
-  assert.doesNotMatch(read('public/js/screens/settle.js'), /LevelStrip|levelProgress|accountApi|fetch\(|net\.request/);
+  // 0.3.1 brought the official 卫戍认证 level settlement (LevelStrip: 获得卫戍认证 +N and 每日防卫目标). It invents nothing:
+  // the 60 levels are config.rewards.milestones (act2autochess milestoneList) and the progress is counted from this
+  // device's own records (ui/stats.js loadStats) — no account, no network. The guards below still hold.
+  const settle = read('public/js/screens/settle.js');
+  assert.doesNotMatch(settle, /accountApi|fetch\(|net\.request/);
+  assert.match(settle, /rewards/, 'the level table arrives from config.json, not a literal in the screen');
 });
 
 test('new layout stays on existing grids and text scale; mode selection uses page layout, not modal styling', () => {

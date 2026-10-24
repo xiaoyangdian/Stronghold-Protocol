@@ -1,4 +1,3 @@
-import { freezeSkins } from '../shared/skins.js';
 import { cleanPlayerCard, isCardPortraitId, cardPortraitOperatorId, isCardAvatarId, cardAvatarOperatorId } from '../shared/playerCard.js';
 // server/lobby.js — rooms, seats, host, AI seats, ready/start, reconnect, and room → Match wiring
 // (DESIGN §2, §6.1 LOBBY, §8.1). Implements the handler interface consumed by server/net.js.
@@ -162,7 +161,9 @@ import { cleanPlayerCard, isCardPortraitId, cardPortraitOperatorId, isCardAvatar
 
 import { randomBytes, randomInt } from 'node:crypto';
 import { ERR, MAX_SEATS, MAX_SPECTATORS, ROOM_CODE_LEN, DIFFICULTIES, modeIdFor } from '../shared/constants.js';
-import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, checkDiyPicks, charPotentialChanges } from '../shared/protocol.js';
+import { checkLoadout, checkLoadoutOps, cultivationCharIds, checkNotOwned, checkDiyPicks, charPotentialChanges, checkSkinSelection, operatorCharIds } from '../shared/protocol.js';
+import { ruleOption } from '../shared/plugins/rules.js';
+import { parseTestModeEnv, testModeGate, unrecognizedTestMode } from './testMode.js';
 import { encode, isDroppable, isErrCode, sendRaw, sendSession } from './net.js';
 import { resetStateDelta } from './stateTransport.js';
 import { getData as defaultGetData, lookup } from './data.js';
@@ -261,6 +262,8 @@ export class Room {
      * put every human seat before every AI seat (Match opts.aiPicksLast). Kept across the room's matches.
      */
     this.aiPicksLast = false;
+    /** Test room (DESIGN §34.8). Set only at create, and only when the process switch is on. Never flipped later. */
+    this.test = false;
     /** @type {string | null} */
     this.hostId = null;
     /** @type {(Seat | null)[]} */
@@ -335,6 +338,8 @@ export class Room {
       inMatch: !!this.match,
       matching: this.matching ? { ...this.matching } : null,
       consoleEnabled: !!this.consoleEnabled,
+      // omitted when false so a normal room.state stays identical
+      ...(this.test ? { test: true } : {}),
       seats: this.seats.map((s) => (s
         ? { seat: s.seat, playerId: s.playerId, name: s.name, isBot: s.isBot, ready: s.ready, connected: s.connected && !s.left,
           ...(!s.isBot && s.card ? { card: s.card } : {}),
@@ -391,6 +396,24 @@ export class Lobby {
     this.shuttingDown = false;
     this.now = now;
     this.seedFn = seedFn || (() => randomInt(2 ** 32));
+    // Test rooms (DESIGN §34.8): the switch is parsed here but stays OFF until setTestHost runs with the bound
+    // address. An empty host fails closed, so a server about to bind 0.0.0.0 never briefly accepts test rooms.
+    const testModeOpt = options.testMode;
+    const testHostOpt = options.testHost;
+    if (Object.hasOwn(options, 'testMode') || Object.hasOwn(options, 'testHost')) {
+      options = { ...options };
+      delete options.testMode;
+      delete options.testHost;
+    }
+    const rawTestMode = testModeOpt != null ? testModeOpt
+      : (typeof process !== 'undefined' && process.env ? process.env.SP_TEST_MODE : undefined);
+    this.testMode = parseTestModeEnv(rawTestMode);
+    this.testUnrecognized = unrecognizedTestMode(rawTestMode);
+    this.testHost = '';
+    this.testEnabled = false;
+    this.testWarn = this.testUnrecognized;
+    // A host handed in with the options is the bound address (unit tests, and the launcher that already knows it).
+    if (testHostOpt != null) this.setTestHost(testHostOpt);
     this.opts = { ...LOBBY_DEFAULTS, ...options };
     /** @type {Map<string, Room>} */
     this.rooms = new Map();
@@ -424,6 +447,19 @@ export class Lobby {
      */
     this.autoApplyPlugins = null;
     this.offContentStale = plugins?.onContentStale?.((cs, ids) => this.pluginsChanged(cs, ids, 'content')) || null;
+  }
+
+  /**
+   * The address this process bound. Test rooms stay disabled until this runs; an empty `host` fails closed.
+   * @param {string} host
+   * @returns {{ enabled: boolean, warn: string|null }}
+   */
+  setTestHost(host) {
+    this.testHost = typeof host === 'string' ? host : '';
+    const gate = testModeGate(this.testMode, this.testHost);
+    this.testEnabled = gate.enabled === true;
+    this.testWarn = this.testUnrecognized || gate.warn;
+    return { enabled: this.testEnabled, warn: this.testWarn };
   }
 
   /** Return the room-pinned lane when enabled. */
@@ -1286,7 +1322,9 @@ export class Lobby {
     }
   }
 
-  create(session, { mode, difficulty }) {
+  create(session, { mode, difficulty, test } = {}) {
+    // A test room exists only when the process switch allowed it. The check runs before the room is built.
+    if (test === true && this.testEnabled !== true) return fail(ERR.TEST_DISABLED);
     if (this.queueByPlayer.has(session.playerId)) return fail(ERR.MATCHING);
     const cur = this.roomOf(session);
     if (cur && cur.match) return fail(ERR.ROOM_STARTED, 'leave your running match first');
@@ -1316,6 +1354,7 @@ export class Lobby {
       if ('error' in r) this.warnOnce(`[lobby] the default plugins (${defaults.join(', ')}) cannot be applied: ${r.error}${r.detail ? ` (${r.detail})` : ''}`);
       else { room.content = r.content; this.holdContent(r.content); }
     }
+    room.test = test === true;
     room.ownerKey = key;
     room.seats[0] = this.humanSeat(0, session);
     room.hostId = session.playerId;
@@ -1323,16 +1362,17 @@ export class Lobby {
     session.roomCode = code;
     session.notice = null;
     session.pendingResult = null;
-    this.log.info(`[lobby] ${code} created (${mode}/${difficulty}) by ${session.name}`);
+    this.log.info(`[lobby] ${code} created (${mode}/${difficulty}${room.test ? ", test" : ""}) by ${session.name}`);
     this.broadcastState(room);
     return OK;
   }
 
-  join(session, { code }) {
+  join(session, { code, testAck }) {
     if (this.queueByPlayer.has(session.playerId)) return fail(ERR.MATCHING);
     const norm = String(code).trim().toUpperCase();
     const room = norm.length === ROOM_CODE_LEN ? this.rooms.get(norm) : undefined;
     if (!room) return fail(ERR.ROOM_NOT_FOUND);
+    if (room.test && testAck !== true) return fail(ERR.TEST_CONFIRM);
     const cur = this.roomOf(session);
     // idempotent for members; a spectator of this room goes on below: it may take a free player seat (header)
     if (cur === room && !room.spectatorOf(session.playerId)) { this.sendState(room, session); return OK; }
@@ -1368,10 +1408,11 @@ export class Lobby {
    * room.spectate: one of a co-op room's MAX_SPECTATORS spectator seats, in its lobby or during its match (header). In a
    * running match the match registers the spectator and resends what it may see (Match.addSpectator).
    */
-  spectate(session, { code }) {
+  spectate(session, { code, testAck }) {
     const norm = String(code).trim().toUpperCase();
     const room = norm.length === ROOM_CODE_LEN ? this.rooms.get(norm) : undefined;
     if (!room) return fail(ERR.ROOM_NOT_FOUND);
+    if (room.test && testAck !== true) return fail(ERR.TEST_CONFIRM);
     const cur = this.roomOf(session);
     if (cur === room) {
       if (!room.spectatorOf(session.playerId)) return fail(ERR.ALREADY, 'seated as a player');
@@ -1553,7 +1594,7 @@ export class Lobby {
       return fail(ERR.INTERNAL);
     }
     if (!r || !r.ok) return fail(r && isErrCode(r.error) ? r.error : ERR.INTERNAL, r && typeof r.detail === 'string' ? r.detail.slice(0, 200) : undefined);
-    const { cs, vs, plugins: list, warnings, bytes, dataBytes, modes, kitted, trusted, execution } = r.set;
+    const { cs, vs, plugins: list, warnings, bytes, dataBytes, modes, kitted, trusted, execution, rules } = r.set;
     const modded = isContentHash(cs) && cs !== this.vanilla.cs;
     const frozen = (a) => Object.freeze((Array.isArray(a) ? a : []).map((p) => Object.freeze({ ...p })));
     // the operators its plugins add to a 自选 slot's list (welcome.diyKitted holds the server's own): the pages' pickers
@@ -1566,6 +1607,7 @@ export class Lobby {
         plugins: frozen(list),
         ...(trusted ? {trusted} : {}),
         ...(execution ? {execution} : {}),
+        ...(rules ? { rules } : {}),
         warnings: Object.freeze([...(warnings || [])]),
         bytes: Number(bytes) || 0,
         ...(modded ? { dataBytes: Number(dataBytes) || 0, modes: frozen(modes), ...(extra.length ? { kittedExtra: Object.freeze(extra) } : {}) } : {}),
@@ -1756,7 +1798,13 @@ export class Lobby {
   /** Keep cosmetics current in seats, pending queues and external teammates' active matches. */
   skins(session, { skins }) {
     const data = this.safeData();
-    const clean = freezeSkins(skins, (id) => lookup('chess', id, data));
+    // 0.3.1 model (docs/SKINS.md): the key is an operator charId — match's skinFor/setSkins resolve it that way — and
+    // NOT a chess id. A charId this room's content does not have is dropped; a bad shape refuses the whole map and
+    // leaves the stored choice alone.
+    const ids = operatorCharIds(data);
+    const res = checkSkinSelection(skins, (id) => ids.has(id));
+    if (!res.ok) return fail(ERR.BAD_MSG, 'bad skin selection');
+    const clean = Object.freeze({ ...res.skins });
     session.skins = clean;
     const room = this.roomOf(session);
     const seat = room?.seatOf(session.playerId);
@@ -1766,7 +1814,10 @@ export class Lobby {
     if (queuedSeat) queuedSeat.skins = clean;
     const active = this.activeMatchOf(session);
     const match = active?.queue ? active.match : seat ? room.match : null;
-    if (!match || typeof match.setSkins !== 'function') return OK;
+    if (!match) return OK;
+    // The choice is stored above either way: the next match starts from the seat's copy. A running match that cannot
+    // take it now says so (the client shows it) rather than answering ok and dropping the change.
+    if (typeof match.setSkins !== 'function') return fail(ERR.ROOM_STARTED, 'stored for the next match');
     try {
       return match.setSkins(session.playerId, clean) || OK;
     } catch (e) {
@@ -1819,7 +1870,10 @@ export class Lobby {
     if (typeof room.match.setLoadout !== 'function') return fail(ERR.ROOM_STARTED, 'stored for the next match');
     let r;
     try {
-      r = room.match.setLoadout(session.playerId, loadout, opsSet);
+      // Preserve named defaults for prep merging: normalisation drops them, but they mean reset this operator.
+      r = ruleOption(room.content?.rules, 'prepLoadout') === 'prep'
+        ? room.match.setLoadout(session.playerId, entries, ops)
+        : room.match.setLoadout(session.playerId, loadout, opsSet);
     } catch (e) {
       this.log.error(`[lobby] ${room.code} match.setLoadout threw`, e);
       return fail(ERR.INTERNAL);
@@ -1943,10 +1997,18 @@ export class Lobby {
    * server's content identity (header "Content identity").
    */
   welcomeInfo() {
-    if (!this.vanilla) return { diyKitted: KITTED_CHARS };
-    let n;
-    try { n = Number(this.plugins?.unofficial?.()) || 0; } catch { n = 0; }
-    return { diyKitted: KITTED_CHARS, content: n > 0 ? { vanilla: this.vanilla.cs, plugins: n } : { vanilla: this.vanilla.cs } };
+    let info;
+    if (!this.vanilla) info = { diyKitted: KITTED_CHARS };
+    else {
+      let n;
+      try { n = Number(this.plugins?.unofficial?.()) || 0; } catch { n = 0; }
+      info = { diyKitted: KITTED_CHARS, content: n > 0 ? { vanilla: this.vanilla.cs, plugins: n } : { vanilla: this.vanilla.cs } };
+      // Catalogue metadata, never part of a room or match; omitted when no loaded plugin publishes a notice.
+      if (this.plugins?.hasNotices?.()) info.content.notices = true;
+    }
+    // Omitted when the switch is off, so a welcome from a normal server stays identical.
+    if (this.testEnabled === true) info.testMode = true;
+    return info;
   }
 
   // ---------------------------------------------------------------------------------------------------
@@ -1965,6 +2027,9 @@ export class Lobby {
    * @param {Room} room @param {string | null} key @param {object | null} checkpoint
    */
   startMatchWith(room, key, checkpoint, { departedPlayerIds = [] } = {}) {
+    // The process gate is rechecked here, not only in create(): it can close while the room waits (setTestHost), and a
+    // checkpoint restore of a test room must fail closed too. Both start paths below are behind this one check.
+    if (room.test && !this.testEnabled) return fail(ERR.TEST_DISABLED);
     if (room.recoveryContentMissing || (checkpoint?.requireCs && checkpoint.cs !== room.content?.cs)) return fail(ERR.CONTENT_NOT_READY);
     if (this.matchWorkerPool && !room.modded) return this.startMatchWithWorker(room, key, checkpoint, { departedPlayerIds });
     return this.startMatchWithLocal(room, key, checkpoint, { departedPlayerIds });
@@ -1994,6 +2059,8 @@ export class Lobby {
         roomCode: room.code, mode: room.mode, difficulty: room.difficulty, modeId: modeIdFor(room.mode, room.difficulty),
         seats, spectators: room.spectators.map((s) => s.playerId), consoleEnabled: !!room.consoleEnabled,
         hostId: room.hostId, ...(room.content ? { cs: room.content.cs } : {}),
+        // only a room created as a test room (wireOptions forwards test + hostId only for these)
+        ...(room.test === true ? { test: true } : {}),
         seed, matchNo, aiPicksLast: !!room.aiPicksLast,
       }, {
         created: (match) => {
@@ -2076,9 +2143,15 @@ export class Lobby {
         matchNo,
         data,
         hostId: room.hostId,
+        // only a room created as a test room; a normal match opts object does not grow a test key
+        ...(room.test === true ? { test: true } : {}),
         ...(room.content ? { cs: room.content.cs } : {}),
         ...(room.content?.vs ? { vs: room.content.vs } : {}),
         ...(modded ? { requireCs: true } : {}),
+        // The list the lobby just checked the picks with (kittedFor). Vanilla rooms omit it: setDiy stays on
+        // KITTED_CHARS, and the worker payload / test journal of a normal match do not grow a key.
+        ...(modded ? { kitted: this.kittedFor(room) } : {}),
+        ...(room.content?.rules ? { rules: room.content.rules } : {}),
         workerPool: modded ? null : this.workerPoolFor(room.code),
         log: this.log,
         now: this.now,
@@ -2553,6 +2626,12 @@ export class Lobby {
     const room = this.roomOf(session);
     const match = active?.match || room?.match;
     if (!match) return room ? fail(ERR.WRONG_PHASE, 'no running match') : fail(ERR.NOT_IN_ROOM);
+    if (msg.t === 'g.test') {
+      if (!this.testEnabled) return fail(ERR.TEST_DISABLED);
+      // `room` may be null here: this branch routes an already-queued match through activeMatchOf, and a queue entry
+      // does not have to belong to a room (upstream's early `if (!room) return fail(NOT_IN_ROOM)` cannot apply).
+      if (room?.test !== true) return fail(ERR.TEST_FORBIDDEN);
+    }
     if (msg.t === 'g.leave') {
       if (active?.queue && !active.room?.seatOf(session.playerId)) this.leaveQueuedMatchPlayer(active, session.playerId);
       else if (active?.queue) this.removeMember(active.room, session.playerId);
@@ -2560,7 +2639,7 @@ export class Lobby {
       return OK;
     }
     // a spectator only watches (header): nothing else of it ever reaches the match
-    if (room && msg.t !== 'g.watch' && room.spectatorOf(session.playerId)) return fail(ERR.SPECTATOR);
+    if (room && msg.t !== 'g.watch' && !(room.test && msg.t === 'g.test') && room.spectatorOf(session.playerId)) return fail(ERR.SPECTATOR);
     let res;
     try {
       res = match.handle(session.playerId, msg);
@@ -2582,9 +2661,10 @@ export class Lobby {
     }
     if (res && typeof res.then === 'function') {
       // a match in a match host answers later (header "Gameplay plugins"): the reply waits for it
-      if (room.match?.hosted === true) {
+      // (`match`, not `room.match`: this branch's queued path may have no room at all)
+      if (match.hosted === true) {
         return Promise.resolve(res).then((r) => matchAnswer(r), (e) => {
-          this.log.error(`[lobby] ${room.code} match.handle(${msg.t}) rejected`, e);
+          this.log.error(`[lobby] ${room?.code || 'queue'} match.handle(${msg.t}) rejected`, e);
           return fail(ERR.INTERNAL);
         });
       }

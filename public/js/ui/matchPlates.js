@@ -5,14 +5,14 @@
 //   * FinalAssaultPlate — 最终攻势: each survivor's LP runs along a line into one node (the merged team LP, its total),
 //     then the leader's crest lights up beside it: 合力击败敌方领袖！
 //   * HiddenCorePlate — 隐秘核心已解锁 at the hidden round's start: the core crest glitches in red, then settles.
-//   * DownedPlate — 协议已失效: the own LP ran out while the team plays on; 继续观战 closes it, 前往结算 asks to leave.
 //   * EndPlate — the match's end over the field, before the settlement screen (screens/game.js GameScreen):
 //     击败了全部领袖！/ 击败了敌方领袖！/ 未能击破隐秘核心 / 模拟中断 (endPlateOf).
+// 协议已失效 is not here: it is upstream's ui/downedPlate.js (a full-screen Modal), which is what screens/game.js shows.
+// The fork's own plate of that name was retired with the merge (docs/MERGE_0.3.1.md).
 // screens/game.js picks the moments. Styles: css/screens/game.css 首领与结局弹窗. With prefers-reduced-motion they still
 // show, without the motion.
-import { useEffect, useRef, useState } from '../../vendor/hooks.module.js';
 import { html, Icon } from './components.js';
-import { Img, PlayerAvatar, GIcon } from './gameComponents.js';
+import { Img, PlayerAvatar } from './gameComponents.js';
 import { PixBot } from './pixbots.js';
 import { useTimedLeave } from './matchPopups.js';
 import { sortedPlayers } from './gameLogic.js';
@@ -158,44 +158,6 @@ export function HiddenCorePlate({ icon = null, onDone }) {
       <div class="core__words">
         <b class="core__title">${t('隐秘核心已解锁')}</b>
         <span class="core__sub">${t('挑战失败不影响最终结算')}</span>
-      </div>
-    </div>
-  </div>`;
-}
-
-/**
- * 协议已失效: the own LP ran out. 继续观战 (or Esc) closes it; 前往结算 hands over to the exit flow.
- * @param {{ onWatch: Function, onSettle: Function }} props
- */
-export function DownedPlate({ onWatch, onSettle }) {
-  const [out, setOut] = useState(false);
-  const watchRef = useRef(null);
-  useEffect(() => {
-    const id = setTimeout(() => setOut(true), 560);
-    const focus = setTimeout(() => watchRef.current?.focus?.(), 900);
-    const onKey = (e) => { if (e.key === 'Escape') onWatch(); };
-    window.addEventListener('keydown', onKey);
-    return () => { clearTimeout(id); clearTimeout(focus); window.removeEventListener('keydown', onKey); };
-  }, []);
-  return html`<div class="downpl" role="dialog" aria-modal="true" aria-label=${t('协议已失效')} data-testid="downed-plate">
-    <i class="downpl__veil" aria-hidden="true"></i>
-    <div class="downpl__band">
-      <i class="downpl__line downpl__line--l" aria-hidden="true"></i><i class="downpl__line downpl__line--r" aria-hidden="true"></i>
-      <div class="downpl__panel">
-        <i class="bplate__ink" aria-hidden="true"></i><i class="bplate__grid" aria-hidden="true"></i>
-        <i class="downpl__tick downpl__tick--a" aria-hidden="true"></i><i class="downpl__tick downpl__tick--b" aria-hidden="true"></i>
-        <span class=${cx('downpl__face', out && 'is-out')} aria-hidden="true">
-          <${PixBot} kind=${out ? 'downed' : 'calm'} class="downpl__pix" />
-          <small>PROTOCOL // LOST</small>
-        </span>
-        <span class="downpl__words">
-          <b class="downpl__title">${t('协议已失效')}</b>
-          <small class="downpl__sub"><i aria-hidden="true"></i>STRONGHOLD PROTOCOL</small>
-        </span>
-      </div>
-      <div class="downpl__btns">
-        <button type="button" ref=${watchRef} class="downpl__btn downpl__btn--watch" onClick=${onWatch}><${GIcon} name="eye" />${t('继续观战')}</button>
-        <button type="button" class="downpl__btn downpl__btn--settle" onClick=${onSettle}><${Icon} name="exit" />${t('前往结算')}</button>
       </div>
     </div>
   </div>`;

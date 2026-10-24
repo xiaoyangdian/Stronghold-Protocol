@@ -1347,3 +1347,20 @@ button.sw-eth:hover { border-color: #fff; }
 /* Skin portraits keep the same tall framing as operator art. */
 .cardpick__variants--portrait .cardpick__img { aspect-ratio: 1 / 2; }
 .cardpick__variants--portrait .cardpick__img img { object-fit: contain; }
+
+
+/* ==========================================================================================
+   以下规则来自上游 v0.3.1：本分支文件里没有同名选择器（按选择器取差集自动追加）。
+   与两侧同名的规则一律保留本分支的版本。
+   ========================================================================================== */
+.create-box__test {
+  display: flex; flex-direction: row; flex-wrap: wrap; align-items: center; gap: .04rem .1rem;
+  color: #e8b84a; font-size: calc(.16 * var(--t));
+}
+.create-box__test input { width: .2rem; height: .2rem; margin: 0; flex: none; accent-color: #e8b84a; }
+.create-box__test em { flex-basis: 100%; font-style: normal; }
+@media (max-width: 720px) {
+  .create-box__test { font-size: 16px; }
+  .create-box__test input { width: 32px; height: 32px; }
+  .create-box__test em { font-size: 14px; }
+}

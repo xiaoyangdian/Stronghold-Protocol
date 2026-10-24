@@ -141,9 +141,17 @@ test('the server: GET /packs/index.json lists the packs live, GET /packs/<id>/<f
     });
     assert.equal(raw, 404);
     assert.equal((await get('/i18n/qaa.json')).status, 200, 'a single-file pack: the language folder');
+    // A dropped pack shows without a restart. This branch scans the folders in a Worker (server/index.js
+    // `background: true`, so a directory walk never blocks a request): the request that first notices the change still
+    // answers the previous snapshot and the new one lands right after it — poll instead of reading one response.
     put(root, 'public/i18n/qag.json', { 开始: 'G' });
-    await new Promise((r) => setTimeout(r, 1100)); // the registry looks again after a second
-    assert.ok((await (await get('/packs/index.json')).json()).packs.some((p) => p.id === 'qag'), 'a dropped pack shows on the next request');
+    const deadline = Date.now() + 10_000;
+    let seen = false;
+    while (!seen && Date.now() < deadline) {
+      await new Promise((r) => setTimeout(r, 200));
+      seen = (await (await get('/packs/index.json')).json()).packs.some((p) => p.id === 'qag');
+    }
+    assert.ok(seen, 'a dropped pack shows on a later request');
   } finally {
     await srv.close();
     fs.rmSync(root, { recursive: true, force: true });

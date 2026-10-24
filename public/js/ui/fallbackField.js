@@ -39,7 +39,10 @@ function unitArt(m, info, settings) {
   if (!m || !id) return null;
   if (info.side === 'enemy' || String(id).startsWith('enemy_')) return enemyIconUrl(m, id);
   if (String(id).startsWith('token_')) return tokenAvatarUrl(m, id);
-  return avatarUrl(m, id, { skin: visibleSkin(info.skin, settings) });
+  const skin = visibleSkin(info.skin, settings);
+  if (skin) return avatarUrl(m, id, { skin });
+  // Same golden rule as chessAvatarUrl: a character-key avatar uses avatarE2 on a golden piece.
+  return chessAvatarUrl(m, { isGolden: !!info.golden, assets: { avatar: id } });
 }
 
 /** Look of the stage tile (row, col) on the fallback board (stage coordinates). */
@@ -500,6 +503,7 @@ export function createFallbackView(host, opts = {}) {
       schedule();
     },
     highlightTiles(tiles, style) {
+      if (st.destroyed) return false;
       if (!tiles || !style) { st.highlight.clear(); st.hlGroups.clear(); schedule(); return; }
       if (typeof style === 'object' && style.group) {
         // a named group (direction wheel / selected unit range): replaced as a whole, drawn as a range tile

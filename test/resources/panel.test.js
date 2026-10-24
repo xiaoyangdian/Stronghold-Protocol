@@ -62,7 +62,9 @@ describe('where the preload is reachable', () => {
     assert.match(title, /const settings = useSettings\(\);/);
     assert.match(title, /<div class="title-preload"><\$\{ResourceLauncher\} enabled=\$\{settings\.preload\} onChange=\$\{\(v\) => updateSettings\(\{ preload: v \}\)\} \/><\/div>/);
     const css = read('public/css/screens/title.css');
-    assert.match(css, /\.title-preload \{[^}]*position: absolute;[^}]*right: \.44rem;[^}]*bottom: \.86rem;/, 'bottom-right, above the footer');
+    // The offsets are in UI units (calc(N * var(--ui-unit))) since the HUD moved to responsive units; 0.44 / 0.86 are
+    // the same bottom-right corner the plain .44rem / .86rem used to place.
+    assert.match(css, /\.title-preload \{[^}]*position: absolute;[^}]*right: calc\(0\.44 \* var\(--ui-unit, 1rem\)\);[^}]*bottom: calc\(0\.86 \* var\(--ui-unit, 1rem\)\);/, 'bottom-right, above the footer');
     assert.match(css, /\.res-pill \{/, 'the pill has its own styling');
   });
 

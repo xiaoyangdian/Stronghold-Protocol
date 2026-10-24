@@ -103,7 +103,7 @@ test('built HTML, hashed assets, runtime CDN and data routes preserve the produc
   finally { await new Promise((resolve) => srv.close(resolve)); }
 });
 
-test('rendering, simulation and Three.js remain outside the initial static import graph', () => {
+test('rendering, simulation and Three.js remain outside the initial static import graph', async () => {
   const seen = new Set();
   function visit(key) {
     if (seen.has(key)) return;
@@ -112,10 +112,16 @@ test('rendering, simulation and Three.js remain outside the initial static impor
   }
   visit('index.html');
   const initial = [...seen].map((key) => manifest[key].name);
-  for (const name of ['simulation', 'app', 'three', 'archive', 'announcementMarkdown', 'sweep']) assert.ok(!initial.includes(name), `${name} loads lazily`);
+  // `sweep` is not in this list any more: 0.3.1 draws the report as a Modal of the lobby, and the lobby imports it
+  // statically (test/ui/sweep.test.js pins that import) — so it shares the lobby's chunk, which is the initial one. The
+  // fork's own lazy entry was part of its hub-page navigation (S.W.E.E.P. as a screen behind `import('./sweep.js')`),
+  // and that navigation gave way to 0.3.1's lobby; docs/MERGE_0.3.1.md records the trade.
+  for (const name of ['simulation', 'app', 'three', 'archive', 'announcementMarkdown']) assert.ok(!initial.includes(name), `${name} loads lazily`);
   assert.ok(Object.values(manifest).some((entry) => entry.name === 'archive' && entry.isDynamicEntry), 'ZIP library is available on demand');
   assert.ok(Object.values(manifest).some((entry) => entry.name === 'announcementMarkdown' && entry.isDynamicEntry), 'popup Markdown is available on demand');
-  assert.ok(Object.values(manifest).some((entry) => entry.name === 'sweep' && entry.isDynamicEntry), 'S.W.E.E.P. report is available on demand');
+  // … and it is really in there, not merely referenced: the report's own markup rides along in the initial chunk.
+  const initialJs = await fs.readFile(path.join(outDir, manifest['index.html'].file), 'utf8');
+  assert.match(initialJs, /sw-tabs/, 'S.W.E.E.P. report is built into the lobby chunk');
 });
 
 test('built simulation retains operator kits and domain mechanics: same deterministic battle results as Node', async () => {

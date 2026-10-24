@@ -8,7 +8,8 @@ import { ProtocolScene } from '../ui/protocolScene.js';
 // Lobby screen: pick 独立模拟 / 同盟模拟 / 同盟匹配 and a difficulty (标准/险境/绝境/终极), create a room,
 // join the public alliance queue, or join a private room with a 同盟密钥 (recent codes remembered).
 // A private room can also be joined as a player or watched from one of its MAX_SPECTATORS spectator seats.
-// Shows connection status + ping.
+// Shows connection status + ping. The side column opens the read-only S.W.E.E.P.报告
+// (screens/sweep.js: 盟约 / 策略 / 敌方资料 and the enemy codex).
 //
 // Difficulty descriptions come from data/config.json `modes[modeId]` when present, else from the
 // official act2autochess `modeDataDict` texts embedded below (desc + effectDescList), so the
@@ -21,15 +22,20 @@ import { ProtocolScene } from '../ui/protocolScene.js';
 import { ResumeMatchButton } from '../ui/resumeMatch.js';
 import { useEffect, useLayoutEffect, useRef, useState } from '../../vendor/hooks.module.js';
 import { DIFFICULTIES, DIFFICULTY_NAMES, DIFFICULTY_COLORS, ROOM_CODE_LEN, MAX_SEATS, MAX_SPECTATORS, modeIdFor, ERR } from '../../../shared/constants.js';
-import { html, Button, Icon, MicroLabel, TextField, PingPill, OnlineCount, AvatarFrame, Tooltip, Spinner, DifficultyIcon, Modal, doctorNo } from '../ui/components.js';
+import { html, confirmDialog, Button, Icon, MicroLabel, TextField, PingPill, OnlineCount, AvatarFrame, Tooltip, Spinner, DifficultyIcon, Modal, doctorNo } from '../ui/components.js';
 import { AnnouncementButton } from '../ui/announcement.js';
+import { TestMark } from '../ui/testConsole.js';
 import { toast, toastError } from '../ui/toasts.js';
 import { GuideButton } from '../ui/guide.js';
 import { openStats } from './stats.js';
+// S.W.E.E.P.报告 (test/ui/sweep.test.js pins this import and the `sweepOpen` ternary below). The screen itself is
+// lazy because the lobby screen is: the report never reaches the initial bundle (test/vite.test.js).
+import { SweepReport } from './sweep.js';
 import { SettingsButton } from '../ui/settings.js';
 import { PwaInstallButton } from '../ui/device.js';
 import { LoadoutButton } from './loadout.js';
 import { AchievementEntry, AchievementPanel } from '../ui/achievements.js';
+import { NoticesButton } from '../ui/notices.js';
 import { net, identity } from '../net.js';
 import { store, useStore, shallowEqual, loadPref, savePref } from '../store.js';
 import { data, getConfig, getMode, getStage, useData } from '../data.js';
@@ -179,9 +185,29 @@ export function recentRooms() {
 }
 
 /** @param {string} code */
-export function rememberRoom(code) {
+export function rememberRoom(code, test = false) {
   if (!CODE_RE.test(code)) return;
-  savePref('recentRooms', [code, ...recentRooms().filter((c) => c !== code)].slice(0, 4));
+  const recent = [code, ...recentRooms().filter((c) => c !== code)].slice(0, 4);
+  const marks = loadPref('recentTestRooms', []);
+  savePref('recentTestRooms', recent.filter(c => c === code ? test : Array.isArray(marks) && marks.includes(c)));
+  savePref('recentRooms', recent);
+}
+
+/**
+ * Join or watch a room by its key, confirming first when the room is a 测试房间 (the server answers
+ * ERR.TEST_CONFIRM — 不计入任何记录): the extra `testAck` says the player accepted that.
+ * @param {'room.join'|'room.spectate'} type @param {string} key
+ */
+export async function joinKnown(type, key) {
+  try { return await net.request(type, { code: key }); } catch (err) {
+    if (err?.code !== ERR.TEST_CONFIRM) throw err;
+    const text = type === 'room.spectate'
+      ? t('这是测试房间，不计入任何记录。确认观战？')
+      : t('这是测试房间，不计入任何记录。确认加入？');
+    if (await confirmDialog({ title: t('测试'), text })) {
+      return net.request(type, { code: key, testAck: true });
+    }
+  }
 }
 
 const FALLBACK_TIPS = [
@@ -250,19 +276,6 @@ function HubTile({ icon, label, en, onClick, children }) {
   </button>`;
 }
 
-/** Loading is a page too; opening S.W.E.E.P. must never briefly create a modal. */
-export function SweepLoadingPage({ onClose }) {
-  const back = useRef(null);
-  useLayoutEffect(() => { back.current?.focus(); }, []);
-  return html`<main class="screen sweep-host" aria-label=${t('S.W.E.E.P.报告')} onKeyDown=${(e) => {
-    if (e.key === 'Escape' && !e.defaultPrevented && !document.querySelector('.modal, .guide')) { e.preventDefault(); onClose(); }
-  }}>
-    <div class="sw"><header class="sw-top"><button ref=${back} type="button" class="sw-back" onClick=${onClose}
-      aria-label=${t('返回大厅')}><${Icon} name="chevronLeft" /><span>S.W.E.E.P.</span></button></header>
-      <p class="sw-loading" role="status">${t('正在读取报告…')}</p></div>
-  </main>`;
-}
-
 function StampRing() {
   return html`<svg class="pcard__ring" viewBox="0 0 120 100" aria-hidden="true" focusable="false">
     <path pathLength="1" d="M18 62C6 34 34 8 70 10c34 2 48 30 38 54-10 24-46 32-72 22C20 80 10 66 16 50" />
@@ -318,7 +331,8 @@ function ProtocolPage(props) {
 }
 
 /** Full secondary page with the fork's visual treatment and this branch's protocol. */
-export function ProtocolSelect({ card, roomMode, difficulty, onDifficulty, online, busy, onClose, onStart, queue, onCancel, pageRef }) {
+export function ProtocolSelect({ card, roomMode, difficulty, onDifficulty, online, busy, onClose, onStart, queue, onCancel, pageRef,
+  testMode = false, asTest = false, onTest }) {
   const info = difficultyInfo(roomMode, difficulty);
   return html`<main ref=${pageRef} class="screen protocol-screen" aria-label=${`${t(card.name)} · ${t('选择模拟协议')}`}>
     <div class="proto" style=${`--d-color:${DIFFICULTY_COLORS[difficulty]}`}>
@@ -339,6 +353,11 @@ export function ProtocolSelect({ card, roomMode, difficulty, onDifficulty, onlin
           </div>
           <div class="proto-foot">
             ${queue ? html`<${MatchQueuePanel} queue=${queue} onCancel=${onCancel} />` : html`
+              ${testMode ? html`<label class="create-box__test" data-testid="create-test">
+                <input type="checkbox" checked=${asTest} onChange=${(e) => onTest?.(e.target.checked)} />
+                <span>${t('测试房间')}</span>
+                <em class="t-dim">${t('不计入战绩。房间会标明「测试」，只有房主能使用测试指令。')}</em>
+              </label>` : null}
               <p class="proto-hint">${!online ? t('正在连接服务器…') : roomMode === 'match' ? t('仅匹配真人 · 满四人后开始') : roomMode === 'solo' ? t('创建后即可开始模拟') : t('创建后可邀请好友或匹配队友')}</p>
               <button type="button" class="proto-start" disabled=${!online || !!busy} onClick=${onStart}>
                 <span class="proto-start__mark" aria-hidden="true"><span class="proto-start__rook"><i>[</i><${Icon} name="rook" /><i>]</i></span><small>STRONGHOLD<br />PROTOCOL</small></span>
@@ -369,7 +388,7 @@ export function LobbyScreen() {
     const d = loadPref('lobby.difficulty', 'FUNNY');
     return DIFFICULTIES.includes(d) ? d : 'FUNNY';
   });
-  const [panel, setPanel] = useState(null); // protocol | join | achievements | sweep; existing server actions only
+  const [panel, setPanel] = useState(null); // protocol | join | achievements; existing server actions only
   const bg = useHubBackdrop();
   const [bgOpen, setBgOpen] = useState(false);
   const sweepEntry = useRef(null);
@@ -377,7 +396,6 @@ export function LobbyScreen() {
   const lobbyRef = useRef(null);
   const previousPanel = useRef(null);
   useLayoutEffect(() => {
-    if (previousPanel.current === 'sweep' && panel !== 'sweep') sweepEntry.current?.focus();
     if (previousPanel.current === 'protocol' && panel !== 'protocol') {
       const entry = modeEntries.current[roomMode];
       // A queued player's mode entries are disabled; focus the still-available cancel action instead.
@@ -386,18 +404,13 @@ export function LobbyScreen() {
     }
     previousPanel.current = panel;
   }, [panel]);
-  const [sweepModule, setSweepModule] = useState(null);
-  useEffect(() => {
-    if (panel !== 'sweep' || sweepModule) return undefined;
-    let current = true;
-    import('./sweep.js').then((module) => { if (current) setSweepModule(module); }).catch((err) => {
-      if (current) { toastError(err); setPanel(null); }
-    });
-    return () => { current = false; };
-  }, [panel, sweepModule]);
   const [code, setCode] = useState('');
+  const [asTest, setAsTest] = useState(false);
+  const testMode = useStore((s) => s.testMode === true);
   const [busy, setBusy] = useState(null);
   const [recent] = useState(recentRooms);
+  const marks = loadPref('recentTestRooms', []);
+  const [sweepOpen, setSweepOpen] = useState(false);
   const alive = useRef(true);
   const inFlight = useRef(false); // synchronous guard against double clicks (state updates are async)
   useEffect(() => () => { alive.current = false; }, []);
@@ -418,7 +431,9 @@ export function LobbyScreen() {
       if (alive.current) setBusy(null);
     }
   };
-  const create = () => run('create', () => net.request('room.create', { mode: roomMode, difficulty }));
+  const create = () => run('create', () => net.request('room.create', {
+    mode: roomMode, difficulty, ...(testMode && asTest ? { test: true } : {}),
+  }));
   const matchmaking = () => run('match', () => net.request('match.join', { mode: 'coop', difficulty }));
   const cancelMatchmaking = () => run('cancel-match', () => net.request('match.leave', {}));
   const join = (c = code) => {
@@ -426,14 +441,14 @@ export function LobbyScreen() {
     // `undefined` — codeArg keeps an event target out of the key and falls back to the input field
     const k = codeArg(c, code);
     if (!k) { toast(t('同盟密钥为 {ROOM_CODE_LEN} 位字母或数字', { ROOM_CODE_LEN }), 'warn'); return; }
-    run('join', () => net.request('room.join', { code: k }));
+    run('join', () => joinKnown('room.join', k));
   };
   // a spectator seat: no player seat taken, nothing to do but watch (also a match already running)
   const spectate = (c = code) => {
     // same guard as join: `onClick=${spectate}` passes the click event, not a code
     const k = codeArg(c, code);
     if (!k) { toast(t('同盟密钥为 {ROOM_CODE_LEN} 位字母或数字', { ROOM_CODE_LEN }), 'warn'); return; }
-    run('spectate', () => net.request('room.spectate', { code: k }).catch((err) => {
+    run('spectate', () => joinKnown('room.spectate', k).catch((err) => {
       // Clearer than the bare ERR_TEXT: the usual cause is a code that is not the host's (a remembered one from an
       // earlier room, or another machine's) — the server can only answer "no such room".
       if (err?.code === ERR.ROOM_NOT_FOUND) {
@@ -455,11 +470,10 @@ export function LobbyScreen() {
   const card = MODE_CARDS.find((c) => c.id === roomMode) || MODE_CARDS[1];
   const openMode = (mode) => { pickMode(mode); setPanel('protocol'); };
   // Replace the lobby instead of covering an interactive lobby with a dialog/backdrop.
-  if (panel === 'sweep') return sweepModule ? html`<${sweepModule.SweepReport} onClose=${() => setPanel(null)} />`
-    : html`<${SweepLoadingPage} onClose=${() => setPanel(null)} />`;
   if (panel === 'protocol') return html`<${ProtocolPage} card=${card} roomMode=${roomMode} difficulty=${difficulty} onDifficulty=${pickDifficulty}
     online=${online} busy=${busy} onClose=${() => setPanel(null)} onStart=${roomMode === 'match' ? matchmaking : create}
-    queue=${matchQueue} onCancel=${cancelMatchmaking} />`;
+    queue=${matchQueue} onCancel=${cancelMatchmaking}
+    testMode=${testMode} asTest=${asTest} onTest=${setAsTest} />`;
   return html`<div ref=${lobbyRef} class="screen lobby-screen lobby-hub" data-hub-theme=${backdropTheme(bg)}>
     <${HubBackdrop} bg=${bg} />
     <header class="topbar hub-topbar">
@@ -471,6 +485,7 @@ export function LobbyScreen() {
           <${AnnouncementButton} variant="ghost" size="sm" class="topbar-announcement" />
         </div>
         <div class="topbar__tools">
+          <${NoticesButton} />
           <${Button} variant="secondary" size="sm" square=${true} title=${t('大厅背景')} aria-label=${t('大厅背景')}
             onClick=${() => setBgOpen(true)}><${BackdropGlyph} /><//>
           <${LobbyMusicButton} />
@@ -501,7 +516,7 @@ export function LobbyScreen() {
         <${TipsPanel} />
       </aside>
       <aside class="hub-right">
-        <button ref=${sweepEntry} type="button" class="hub-plate hub-plate--sweep" onClick=${() => setPanel('sweep')}>
+        <button ref=${sweepEntry} type="button" class="hub-plate hub-plate--sweep" onClick=${() => setSweepOpen(true)}>
           <span class="hub-plate__glyph"><${Icon} name="book" /></span>
           <span class="hub-plate__label">${t('S.W.E.E.P.报告')}</span><span class="hub-plate__tag">REPORT</span>
         </button>
@@ -533,10 +548,12 @@ export function LobbyScreen() {
         </div>
         <div class="join-foot">
           ${recent.length ? html`<span class="t-lo">${t('最近的同盟')}</span>
-            ${recent.map((c) => html`<button key=${c} type="button" class="code-chip num" title=${t('填入密钥（不会直接加入）')} onClick=${() => setCode(c)}>${c}</button>`)}`
+            ${recent.map((c) => html`<button key=${c} type="button" class="code-chip num" title=${t('填入密钥（不会直接加入）')}
+              onClick=${() => setCode(c)}>${c}${Array.isArray(marks) && marks.includes(c) ? html` <${TestMark} />` : null}</button>`)}`
             : html`<span class="t-dim">${t('向同伴索取 {ROOM_CODE_LEN} 位同盟密钥，或直接打开邀请链接', { ROOM_CODE_LEN })}</span>`}
         </div>
       </div>
     <//>
+    ${sweepOpen ? html`<${SweepReport} onClose=${() => setSweepOpen(false)} />` : null}
   </div>`;
 }

@@ -355,7 +355,8 @@ test('complete Worker matches preserve tokens and checkpoint state through three
     let srv = await boot();
     let c = await connect(srv);
     const identity = await c.hello('Worker Redis');
-    const skins = { chess_char_1_01_a: 'char_498_inside@kitchen#2' };
+    // a charId, not a chess id (docs/SKINS.md: the choice is keyed by OPERATOR, and room.skins refuses a chess key)
+    const skins = { char_498_inside: 'char_498_inside@kitchen#2' };
     assert.equal((await c.request({ t: 'room.skins', skins })).t, 'ok');
     await c.request({ t: 'room.create', mode: 'solo', difficulty: 'NORMAL' });
     const code = (await c.waitFor('room.state')).code;

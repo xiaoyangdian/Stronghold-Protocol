@@ -1,4 +1,4 @@
-import { freezeSkins } from '../../shared/skins.js';
+import { checkSkinSelection, operatorCharIds } from '../../shared/protocol.js';
 // server/match/snapshot.js — checkpoints of a running match (Redis persistence, docs/DEPLOY.md「断点续玩」).
 //
 // WHY A CHECKPOINT AND NOT A REPLAY: the match engine is deterministic in virtual time (tests run whole matches on a
@@ -414,7 +414,11 @@ export function restoreMatch(m, doc, { createRngFromState, log = console, bestEf
     const stockEntries = ps.diyStock?.entries;
     ps.setNotOwned(ps.standIns || []);
     ps.setDiy(ps.diy || {});
-    ps.skins = freezeSkins(ps.isBot ? null : ps.skins, (id) => ps.gd.chess(id)); // old checkpoints: defaults
+    // 皮肤 (docs/SKINS.md): the choice is keyed by operator charId, and this match's content decides which operators
+    // still exist — an operator it lost is dropped (the default model), the rest are kept. A map that is not a plain
+    // charId → skinId map at all (a checkpoint older than that rule) restores as "every operator on its default".
+    const skins = ps.isBot ? null : checkSkinSelection(ps.skins, (id) => operatorCharIds(ps.gd?.raw).has(id));
+    ps.skins = Object.freeze(skins?.ok ? { ...skins.skins } : {});
     ps.initDiyStock(new Set([...(m.disabledBonds || []), ...(m.staticInactiveBonds || [])]));
     if (stockEntries instanceof Map) for (const [id, saved] of stockEntries) {
       const entry = ps.diyStock.entries.get(id);

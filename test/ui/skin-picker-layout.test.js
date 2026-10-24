@@ -52,13 +52,14 @@ test('skin art and minimum height scale with the local design unit instead of re
   assert.match(style('.lo-skins', true)['grid-template-columns'], /minmax\(min\(100%, calc\(1\.5 \* var\(--ui-unit\)/);
 });
 
-test('compact picker keeps skin names, series, selection semantics and full-label tooltips', () => {
+test('compact picker keeps skin names, series, selection semantics and its tile hints', () => {
   const source = read('public/js/ui/skinPicker.js');
-  assert.match(source, /title=\$\{\[x\.name, x\.group\]\.filter\(Boolean\)\.join\(' · '\)\}/);
-  assert.match(source, /class="lo-skin__name">\$\{x\.name\}/);
-  assert.match(source, /class="lo-skin__group">\$\{x\.group\}/);
+  // 0.3.1 renders the name and the series inside the tile (one row per appearance) and keeps the tooltip for what a
+  // tap does, so the full label is always on screen rather than hidden behind a title attribute.
+  assert.match(source, /class="lo-skin__name">\$\{isDefault \? t\('默认'\) : row\.name\}/);
+  assert.match(source, /class="lo-skin__group">\$\{isDefault \? 'DEFAULT' : row\.group \|\| t\('时装'\)\}/);
   assert.match(source, /role="radiogroup"/);
   assert.match(source, /role="radio" aria-checked/);
-  assert.match(source, /onClick=\$\{\(\) => setSkin\(chessId, x\.id\)\}/);
-  assert.match(source, /onClick=\$\{\(\) => clearSkin\(chessId\)\}/);
+  assert.match(source, /title=\$\{title\}/);
+  assert.match(source, /onPick=\$\{\(\) => \(row\.own \? clearSkin\(id\) : setSkin\(id, row\.id\)\)\}/);
 });

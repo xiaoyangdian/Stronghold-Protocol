@@ -18,7 +18,7 @@ export class MatchSpDraft {
   enterSpDraft() {
     const draft = generateDraft(this.gd, this.rngDraft, this.round, { stageId: this.stageId, bondAvailable: (bondId) => this.bondLive(bondId), itemAvailable: id => this.itemPool.canGain(id) });
     const alive = this.alivePlayers();
-    if (!draft || !alive.length) { this.enterPrep(); return; }
+    if (!draft || !alive.length) { this.beforePrepOffers(); return; }
     this.phase = PHASE.SP_DRAFT;
     let order = alive.map((p) => p.playerId);
     if (!this.isSolo) this.rngDraft.shuffle(order);
@@ -113,7 +113,7 @@ export class MatchSpDraft {
     if (this.phase !== PHASE.SP_DRAFT) return;
     this.cancel(this._turnTimer);
     this._turnTimer = null;
-    this.enterPrep();
+    this.beforePrepOffers();
   }
 
   /**
@@ -185,12 +185,12 @@ export class MatchSpDraft {
   /** Random item id: a choices.json server pool ({ pool }), a tier, or ≤ maxTier shop-eligible items.
    * `also` (pool_equip_kathe: 突变细胞) joins the draw even though it is shopExcluded. The shop item slot does not
    * read it. `pick` still drops ids that `canGain` refuses, so an empty shop item stays out and an uncapped `also`
-   * id can still be drawn. */
-  rollItemId({ pool = null, tier = null, maxTier = 6, shopLevel = 6, ignoreStock = false } = {}) {
+   * id can still be drawn. `exclude` removes ids before sampling (Cathy's match-long allowance / distinct choices). */
+  rollItemId({ pool = null, tier = null, maxTier = 6, shopLevel = 6, ignoreStock = false, exclude = [] } = {}) {
     const pools = this.gd.choices.pools && typeof this.gd.choices.pools === 'object' ? this.gd.choices.pools : {};
     const p = typeof pool === 'string' && Object.hasOwn(pools, pool) ? pools[pool] : null;
     const rng = this.rngMeta;
-    const pick = (ids, weights = null) => this.itemPool.pick(rng, ids, weights, { ignoreStock });
+    const pick = (ids, weights = null) => this.itemPool.pick(rng, ids.filter((id) => !exclude.includes(id)), weights, { ignoreStock });
     const tierList = (lo, hi) => { const out = []; for (let t = lo; t <= hi; t++) for (const id of this.gd.shopItemsByTier[t] || []) out.push(id); return out; };
     const also = p && Array.isArray(p.also) ? p.also.filter((id) => typeof id === 'string' && this.gd.item(id)) : [];
     const withAlso = (list) => {
@@ -225,13 +225,13 @@ export class MatchSpDraft {
    * bonds (the player's data view: a slotted slot's operator) — 0.2.0 WE2.
    * @returns {{ kind: 'item'|'chess', id: string, golden?: boolean } | null}
    */
-  rollPool(poolId, { shopLevel = 6, extra = null, chessOf = null, ignoreItemStock = false } = {}) {
+  rollPool(poolId, { shopLevel = 6, extra = null, chessOf = null, ignoreItemStock = false, exclude = [] } = {}) {
     const pools = this.gd.choices.pools && typeof this.gd.choices.pools === 'object' ? this.gd.choices.pools : {};
     const p = typeof poolId === 'string' && Object.hasOwn(pools, poolId) ? pools[poolId] : null;
     if (!p || typeof p !== 'object') return null;
     const lvl = Math.max(1, Math.min(6, Number.isInteger(shopLevel) ? shopLevel : 6));
     if (p.kind === 'equip') {
-      const id = this.rollItemId({ pool: poolId, shopLevel: lvl, ignoreStock: ignoreItemStock });
+      const id = this.rollItemId({ pool: poolId, shopLevel: lvl, ignoreStock: ignoreItemStock, exclude });
       return id ? { kind: 'item', id } : null;
     }
     if (p.kind !== 'chess') return null;
