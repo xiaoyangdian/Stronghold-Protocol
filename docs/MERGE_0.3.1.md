@@ -1,7 +1,11 @@
 # 上游 v0.3.1 合并记录
 
-状态：**冲突已全部解决，待验收**。合并分支 `feat/upstream-0.3.1`，锚定上游 tag `v0.3.1`（`b3deebda`），
-不纳入标签后的开发提交（`master` 已到 0.3.2 合并 PR #728）。
+状态：**已完成并提交**（`c313380f`，父 `e01036ae` + `b3deebda`），全量测试与黄金场景通过。合并分支
+`feat/upstream-0.3.1`，锚定上游 tag `v0.3.1`（`b3deebda`），不纳入标签后的开发提交（上游 `master` 已到 0.3.2，
+合并 PR #728）。
+
+配套文档：这次合并**为什么花了六个多小时**、哪些弯路可以避免 → `docs/MERGE_0.3.1_RETRO.md`；
+下次合并照着做的流程 → `docs/MERGE_PLAYBOOK.md`；本地与真机怎么验 → `docs/TESTING_LOCAL.md`。
 
 ## 锚点与基线
 
@@ -60,7 +64,13 @@
 - [x] `data/assets.json` 与 `data/config.json` 的取舍
 - [x] 版本号、CHANGELOG
 - [x] 验收：`npm run build`（7.1s，index 997 kB / gzip 343 kB）、`node tools/golden.mjs`（**288/288** 与基准一致）、`node --test`（根目录 1892 通过 / 0 失败，11 个子目录全绿，合计约 9.3k 项）、`node tools/doctor.mjs`（基本环境正常）
-- [ ] 浏览器冒烟：只做到 HTTP 层（`/`、`/build/index.html`、首屏 JS、`/data/chess.json`、`/js/asset-cdn.js`、`/css/screens/sweep.css` 全 200，服务端日志无 error）。**真实渲染 / 联机对局需要人工过一遍**
+- [ ] 浏览器冒烟：只做到 HTTP 层（`/`、`/build/index.html`、首屏 JS、`/data/chess.json`、`/js/asset-cdn.js`、`/css/screens/sweep.css` 全 200，服务端日志无 error）。
+  `SP_E2E=1 CHROME_PATH=… node --test test/ui/downed-plate.e2e.test.js` 试跑过一次：4 个用例全部停在
+  `Waiting for selector .gm__hud failed`（30 秒超时）。判定为**前置资源缺失** —— `public/assets` 为空
+  （约 720 MB 素材被 gitignore，本机未下载），而不是渲染逻辑坏了；错误发生在 mock 页面的 HUD 挂载之前，
+  与这次删除的 `DownedPlate` 无关。**素材就位后需要重跑这一组**，以及 `test/ui/*.e2e.test.js`（69 个）与
+  `test/render/*.browser.test.js`（26 个）里的其余用例。
+  真实渲染与联机对局仍需人工过一遍，检查表见 `docs/TESTING_LOCAL.md` §5。
 
 ### 数据文件的取舍（逐叶子比对）
 

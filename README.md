@@ -226,6 +226,9 @@ npm start          # 启动服务器：http://localhost:3000
 | [docs/DESIGN.md](docs/DESIGN.md) | 架构与契约（英文）：索引，按章节号找到文件；现行规则在 `docs/design/`（范围与目录分工、坐标与时间、战斗引擎、对局、网络协议、渲染与 UI），各次试玩和各版本的规则修订与依据在 `docs/history/` |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | 代码地图（英文）：服务器、联机协议和前后端共用的战斗模拟，0.2.0 重构后的目录，数据流，黄金结果与导入边界，常见改动从哪里入手 |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | 参与贡献：准备环境、运行测试、忠实原则、提交与 PR 约定、怎样添加自选干员（中文，末尾附英文摘要） |
+| [docs/MERGE_PLAYBOOK.md](docs/MERGE_PLAYBOOK.md) | **合并上游新版的做法**：开动前必读的四份材料、两侧坐标系、冲突裁决三问、两侧测试互斥时怎么取舍、静默合并伤害的四种形态、验证阶梯、红线 |
+| [docs/MERGE_0.3.1_RETRO.md](docs/MERGE_0.3.1_RETRO.md) | 0.3.1 合并的复盘：时间账、五个走回头路的地方、环境坑、值得保留的做法、如果重来 |
+| [docs/TESTING_LOCAL.md](docs/TESTING_LOCAL.md) | **本地运行与真机验证**：素材与构建前置、启动方式、自动化能验到哪一步（含 `npm run ci` 与浏览器 e2e 的开关键）、手测清单、手机真机、排障 |
 | [docs/SIM.md](docs/SIM.md) | 战斗模拟引擎参考（英文）：钩子、技能描述格式、职业默认行为 |
 | [docs/META.md](docs/META.md) | 对局与经济引擎（英文）：回合流程、商店、联防、最终攻势的实现细节 |
 | [docs/DATA.md](docs/DATA.md) | 由官方数据表生成的游戏数据（英文） |
