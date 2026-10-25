@@ -16,12 +16,14 @@
 | `CONTRIBUTING.md` §2 | 官方验证入口：`npm test`、`npm run golden`、`npm run lint && npm run check:imports && npm run typecheck`，以及**一条命令跑完全部 CI 检查**的 `npm run ci` |
 | `tools/ci.mjs` 头部注释 | `npm run ci` 的步骤表：`setup --check` → `npm test` → 服务器冒烟（空闲端口起服、`/healthz`、首页、`doctor`、关服）→ `lint` → `check:imports` → `typecheck`。你打算手写的「冒烟测试」它已经写了 |
 | `docs/MERGE_<上一次>.md` | 上次的取舍原则与**排除项**，直接继承，不要再讨论一遍（例：0.3.0 已排除「导入素材包」与 CSP，0.3.1 不必重新论证） |
+| `docs/BRANCH_VS_UPSTREAM.md` + `node tools/upstream-watch.mjs` | 本次的**范围与归属**：哪些目录整块取上游、哪些保留本分支、冲突面有多少、以及同名不同源（add/add）的文件清单。数字自己重跑，别手抄 |
 | `git remote -v` 与 `git log --merges -3` | 谁是上游、上次合并合的是哪个 tag |
 
-本仓库的 remote 名字与直觉相反，务必确认一遍：
+本仓库的 remote 名字与直觉相反，务必确认一遍（**2026-10-25 已变，别再照旧记忆操作**）：
 
-- `origin` = `xinhai-ai/Stronghold-Protocol` = **本分支**（本地 `master` 追踪它）
-- `upstream` = `sganggs/Stronghold-Protocol` = **上游**（发 `v0.1.0 … v0.3.2` 的那条线）
+- `origin` = `xiaoyangdian/Stronghold-Protocol` = **用户自己的 fork**（当前分支 `feat/upstream-0.3.1` 追踪它）
+- `upstream` = `sganggs/Stronghold-Protocol` = **上游**（发 `v0.1.0 … v0.3.3` 的那条线）
+- `xinhai` = `xinhai-ai/Stronghold-Protocol` = 第三方一级 fork，只作参照，**不要往这里推**
 
 > 0.3.1 的教训：我全程手拼 `node --test test/<dir>/*.test.js` 一个目录一个目录地跑，直到收尾才注意到
 > `npm run ci` 与 `npm run typecheck` 的存在。这两条本可以覆盖「服务器冒烟」「类型检查」两项我后来手工补做的事。
