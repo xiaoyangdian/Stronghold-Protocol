@@ -246,22 +246,33 @@
 | `test/sim` best-of-3 性能 | 1 | 同上 |
 
 
-### 那 2 红是什么
+### 那 2 红是什么（② 已于 2026-10-25 收尾，现只剩 ①）
 
 **① `test/official-tables.test.js` —— 不是本仓库的问题，是 Node 22.22.2 崩。**
 `exitCode 3221226505`（`0xC0000409`），子用例一个都没跑出来。同一个文件在 22.13.1 上全绿，`git stash`
 到基线（`a7b2d165`）同样崩。同族的还有 `test/plugins/{csp,contentBattle,dsl-data}`（这三个是**子用例全过、
 进程退出时崩**）。四个文件都与本次改动无关。
 
-**② `generated manifest data/assets.json` → `every manifest path exists on disk` —— 真问题，但不在这次去改。**
+**② `generated manifest data/assets.json` → `every manifest path exists on disk` —— 已修，见本节末尾「已采用的收尾」。**
 
-清单里 16713 个路径有 **45 个在盘上不存在**：
+清单里 16713 个路径曾有 **45 个在盘上不存在**。当时的分类把两类**假缺失**当成了「上游没有」（见下「订正」），
+真值只有一类：
 
-| 类别 | 数量 | 说明 |
+| 类别 | 数量 | 真因 |
 |---|---|---|
-| `/assets/ui/statistics/*` | 38 | 本分支的 `tools/fetch-assets.mjs` **故意不传 `statsTemplate`**（`screens/stats.js` 自绘），所以这 38 个永远不会下载 |
-| `/assets/enemy/icon/enemy_200{1,2}_…_2.png` 等 | 4 | 梗敌人的 `_2` 图标，上游 CDN 也没有；抓取计划把它们列在 `droppedLeaves` 里 |
-| `/assets/audio/sfx/player/{p_atk_staplegun_s,p_atk_javelinthrow_s,p_atk_richfan_s,p_imp_brightensword_s}.mp3` | 4 | 只有 `_n` 变体在盘上，`_s` 变体缺失 |
+| `/assets/ui/statistics/*` | 37 | 本分支的 `tools/fetch-assets.mjs` **故意不传 `statsTemplate`**，也删掉了 `tools/assets/stats-template.mjs`（`screens/stats.js` 自绘，`grep -rn "statistics/" public/ server/ shared/` 无消费者），所以这 37 条永远不会下载，也没有代码读它们 |
+| 梗敌人 `_2` 图标 4 条 | 4 | **假缺失**：`_2` 上游确实 404，但抓取计划的**第二条备选源就是基图**（`plan.mjs:650` `alt('enemy/icon/<id>.png', RAW.yuanyan + 'enemy/' + baseId)`）。只因镜像对 `_2` 先返回 404、随后直连与 jsDelivr 在本机返回**网络错误**，`runJob` 把整条叶子判成 `status: 'error'`，`downloadLeaves` 认定「暂态失败」而**不再尝试备选源**，于是永远落不了盘 |
+| `p_atk_{staplegun,javelinthrow,richfan}_s` / `p_imp_brightensword_s` | 4 | **假缺失**：上游 `ArknightsAssets2@voice` **有**这些文件（`curl` 实测 200）。当初没抓到是因为镜像**响应头 8 s 超时**（`network.mjs` 的 `MirrorPolicy.timeoutMs` 默认 8000，被当作头响应上限）在并发下被触发，判成 error 后同样被阻断 |
+
+**订正（2026-10-25 复核）：** 上一版写「梗敌人图标上游 CDN 也没有」「只有 `_n` 变体在盘上，`_s` 变体缺失」，
+两句都是错的 —— 前者漏看了计划自带的基图 fallback，后者来自一次**用错 URL 大小写**的探测
+（写成 `.../sound_beta_2/Player/...`，实际是小写 `player/`，于是连盘上已有的 `_n` 都返回 404，被误读成
+「上游没有 `_s`」）。教训：**探测 404 之前先拿一个"确定在盘上"的同族文件做对照**，否则测不出是「文件不存在」
+还是「地址写错 / 通道不通」。
+
+**这 8 条的处理（无需改生成代码）：** 4 个 `_s` 音效用低并发（`concurrency: 1`）走镜像补下，实测 4/4 成功；
+4 个 `_2` 图标按计划自己的 fallback 语义把基图复制成 `_2` 路径（字节与 fallback 会产出的完全一致）。
+补完后 `every manifest path exists on disk` 的缺失从 45 降到 **37**（只剩 statistics）。
 
 **为什么不能就地重生成：** `data/assets.json` 与上游 `b3deebda` **逐字节相同**（合并时按「数据文件取上游」
 处理，见上文「数据文件的取舍」）。用本分支的输入重跑 `npm run assets`，`shrinkGuard` 会拦下写入
@@ -282,13 +293,36 @@
 返回 `ok: false`，于是每次 `npm run setup` 都会再跑一遍 `fetch-assets` 并提示「素材下载未完成」——
 哪怕 722 MB 全都下齐了。`doctor` / 启动器同理。
 
-**两条可选收尾（都要单独一次提交，不能混进合并）：**
-1. **外科式改清单**：手工删掉那 45 条叶子、重算 `stats.files` 与 `hash`，不碰 941 个池。改动最小、
-   `checkAssets` 立刻正常；代价是「生成物被手改」，下次谁重跑 `npm run assets` 又会退回去。
-2. **让生成侧补齐**：先查上游 `docs/research/03-operators.json` 的 `skills` 为什么是空的（是数据源就缺，
-   还是 `tools/asset-hashes.mjs` / 抽取脚本没跑），补上之后重生成才有意义，同时把
-   `audio-pools-data.test.js` 的两个计数改成与数据源一致的推导值而不是魔法数。
+**已采用的收尾：外科式改清单（只删 statistics 那一类）。** 理由：这 37 条是本分支**永远不会**产出的叶子，
+留在清单里它们的唯一效果就是让 `checkAssets()` 永久 `false`、每次启动重跑一遍抓取；删掉之后清单与本分支
+自己的计划一致（`stats.ui` 639 → **602**，而本分支 `plan` 日志本来就打印 `602 UI sprites`）。
 
-在选之前不要动 `data/assets.json`。
+改法与自检（`hash` 必须由 `contentHash(body)` 重算，`body` = 清单去掉 `version/hash/generator/stats`
+四个字段**且保持原键序**；写回用 `JSON.stringify(m, null, undefined) + '\n'`，该文件是单行、末尾有换行）：
+
+```
+删掉 ui 中以 "statistics/" 开头的 37 个键
+stats.ui    = Object.keys(m.ui).length          // 639 → 602
+stats.files = stats.files - 37                  // 16706 → 16669（= 清单里 16676 个 URL − 7 个 /fonts/）
+hash        = sha1(JSON.stringify(body)).slice(0, 12)   // d885b22d8f78 → 23f52e697936
+```
+
+前置自检（做之前务必跑一遍）：用上面的 recipe 对**未修改**的清单重算 `hash`，必须等于现有的 `d885b22d8f78`、
+且 `JSON.stringify(m, null, undefined) + '\n'` 必须与文件原字节完全相同 —— 两条都过才说明这套改写是
+「与工具等价」而不是「凭感觉改」。本次两条都通过。
+
+结果：`every manifest path exists on disk` 转绿（`test/assets.test.js` 57/57）、`checkAssets()` 返回
+`{ok: true, total: 16676, missing: 0}`（`npm run setup` 不再重复下载）、`test/audio-pools-data.test.js`
+的 `refs === 952` / `pools === 941` 未受影响。
+
+代价与后续：`data/assets.json` 不再与上游逐字节相同，将来合并 0.3.3 时这个文件会冲突一次；解法是
+「取上游的清单 → 重跑上面那段脚本」，可脚本化。**注意**：只删了 statistics 这一类，**没有**用
+`--allow-shrink` 全量重生成 —— 那会连带丢掉 111 条音效池（见上），是拿功能换绿灯。
+
+**仍未收尾的一条（记录在案）：** 111 条 `audio.sfx` 池仍然「已提交清单里有、用仓库输入复现不出」。
+根治要在生成侧：查 `docs/research/03-operators.json` 的 `skills` 为什么是空数组（是数据源就缺，还是
+`tools/asset-hashes.mjs` / 抽取脚本没跑），补上之后重生成才有意义，同时把 `audio-pools-data.test.js` 的
+两个计数改成与数据源一致的推导值而不是魔法数。在那之前**不要**用 `--allow-shrink` 或 `--prune` 重生成
+`data/assets.json`。
 
 

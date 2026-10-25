@@ -75,6 +75,27 @@ const RAW='https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/m
 `SP_GITHUB_PROXY` 只写前缀（如 `https://ghfast.top/`，必须 https、不带 query）；**设成空字符串是「禁用
 代理」而不是「恢复默认」**，要恢复默认得删掉这个变量（`[Environment]::SetEnvironmentVariable('SP_GITHUB_PROXY',$null,'User')`）。
 
+#### 1.1.1 两种「明明上游有、却永远下不到」的情况（2026-10-25 实测）
+
+跑完 `fetch-assets` 后先看 `[assets] N leaves dropped: no alternative on disk (…)` 那行。里面有东西时，
+**不要急着认为上游没有**，先按下面两种分类：
+
+**① 主源 404 + 其余通道网络错误 → 整条叶子被判成「暂态失败」，备选源不会被尝试。**
+`downloadLeaves` 的规则是「只有**所有**源都 404 才前进到下一个备选」；但本机只有镜像能通，于是
+`镜像 404（真没有） → raw 网络错误 → jsDelivr 网络错误` 会让 `runJob` 返回 `status: 'error'` 而不是 `'miss'`，
+叶子被 `blocked`，**计划自带的 fallback 永远不生效**（典型是梗敌人的 `_2` 图标：`plan.mjs` 的第二备选源
+就是基图）。这类叶子只能手工按 fallback 语义落盘，或换一台三条通道都正常的机器跑一次。
+
+**② 镜像响应头 8 s 上限。** `network.mjs` 的 `MirrorPolicy.timeoutMs` 默认 `8000`，它同时也是**响应头**的
+截止时间。免费镜像在并发下对 `voice` 分支这类大目录常超过 8 s，于是报
+`GitHub mirror response headers timed out`，同样被归成 error → 同样阻断 fallback。处方是**降到
+`--concurrency=1` 单独补**，实测同一批文件在并发 1 下 1 s 内就下完。
+
+**结论性提醒：** 探测某个素材「上游到底有没有」时，**必须拿一个"确定在盘上"的同族文件做对照**，否则分不清
+「文件不存在」和「地址写错 / 通道不通」。2026-10-25 就踩过：把 `sound_beta_2/player/` 写成
+`sound_beta_2/Player/`（大小写），连已下载好的 `_n` 变体都返回 404，差点得出「上游没有 `_s` 变体」的错误结论
+—— 实际 `_s` 变体 4/4 都是 200，只是当初被抓取判成了 error。
+
 ### 1.2 在 WorkBuddy / CodeBuddy 里跑测试：两个会凭空造出红点的环境因素
 
 这两条都**不是仓库的问题**，但都会让 `npm test` 红一片，而且报错信息完全不指向真因。2026-10-25 全量复跑时
