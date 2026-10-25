@@ -68,6 +68,10 @@ function rig() {
     raf: (fn) => { frames.push(fn); return frames.length; }, caf: () => {},
     setInterval: () => 1, clearInterval: () => {},
     loadSim: () => loaded, logger: QUIET,
+    // 0.3.1 makes the 作战统计 meter opt-in (设置 → 作战统计, default off; screens/game.js pushes it through
+    // setCombatMetrics). This file measures what the meter records, so it pins it on — same as the rig in
+    // test/match/runner.test.js. Without the pin metricsEnabled() is false and nothing is tracked.
+    combatMetrics: true,
   });
   runner.on('field', (f) => shown.push(f.battleId));
   store.patch('match', { public: { phase: PHASE.COMBAT } });

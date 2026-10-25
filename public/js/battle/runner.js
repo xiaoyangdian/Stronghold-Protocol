@@ -197,6 +197,31 @@ export function createBattleRunner(deps) {
     const record = e.combatMetrics();
     if (!(combatHistory.get(e.battleId)?.seconds > record.seconds)) combatHistory.set(e.battleId, record);
   };
+  // Opt-in (设置「作战统计」, default off). A boolean deps.combatMetrics pins a test and ignores setCombatMetrics.
+  // Otherwise screens/game.js pushes the settings store. A Worker host never attaches: its page battle is wire state.
+  //
+  // Restored from 0.3.1: the merge kept the caller (screens/game.js) and this docstring but dropped the whole block,
+  // so the first boot of /dev/game-mock.html died with `battleRunner.setCombatMetrics is not a function` and the HUD
+  // never mounted (no unit test drives pinMetrics:false, so nothing went red). docs/MERGE_0.3.1.md records the hit.
+  let metricsWanted = false;
+  const metricsEnabled = () => (typeof deps.combatMetrics === 'boolean' ? deps.combatMetrics : metricsWanted);
+  const detachCombat = (e) => {
+    if (!e?.combatMetrics) return;
+    rememberCombat(e);
+    try { e.combatMetrics.stop?.(); } catch { /* the reader is already gone */ }
+    e.combatMetrics = null;
+  };
+  function setCombatMetrics(on) {
+    if (typeof deps.combatMetrics === 'boolean') return;
+    const next = on === true;
+    if (next === metricsWanted) return;
+    metricsWanted = next;
+    // [ASSUMED] turning the meter on does not backfill a battle already prepared: the hooks would have missed the
+    // damage already dealt. The next prepare attaches. Turning it off detaches at once.
+    if (next) return;
+    for (const e of entries.values()) detachCombat(e);
+    for (const e of pending.values()) detachCombat(e);
+  }
   /** @type {Map<string, any>} battleId → entry of a b.start still being prepared (prepare(); `battle` null until built) */
   const pending = new Map();
   let cur = null;              // entry on screen
@@ -785,7 +810,11 @@ export function createBattleRunner(deps) {
       e.sim = sim;
       e.battle = battle;
       e.meter = e.host.meter;
-      e.combatMetrics = e.host.remote ? () => e.host.packet?.combat || { seconds: 0, owners: [], rows: [] } : trackCombat(battle);
+      // The Worker page holds wire state only (time, ids): no `damaged` hook and no `heal`, so trackCombat cannot
+      // run there — the fork reads the host's compact packet instead. An in-page Battle gets the meter only when
+      // 作战统计 is on (default off; a test may pin it).
+      if (e.host.remote) e.combatMetrics = () => e.host.packet?.combat || { seconds: 0, owners: [], rows: [] };
+      else if (metricsEnabled()) e.combatMetrics = trackCombat(battle);
       e.t0 = clock() - (e.elapsed / e.speed) * 1000;
       if (lastPool) await e.host.syncPool(lastPool.hp, lastPool.acked ? lastPool.acked[e.fieldId] : undefined);
       if (e.endReason) await endBattle(e);
@@ -932,6 +961,12 @@ export function createBattleRunner(deps) {
       return () => listeners.get(type)?.delete(fn);
     },
     state,
+    /**
+     * 设置「作战统计」. Ignored when `deps.combatMetrics` pins the runner. Off detaches meters already attached.
+     * On does not attach to a battle that was prepared while the meter was off.
+     * @param {boolean} on
+     */
+    setCombatMetrics,
     /** Local-only damage/healing; current battle or the match so far. Read on demand, never sent to the server. */
     combatMetrics({ scope = 'match', ownerId = null } = {}) {
       const localEntries = [...entries.values(), ...pending.values()];

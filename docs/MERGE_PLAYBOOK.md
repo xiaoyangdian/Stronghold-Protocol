@@ -117,19 +117,24 @@ match / lobby / net / public / Node 内置），**不是**模块是否存在。�
 
 ---
 
-## 6. 静默合并伤害的四种形态
+## 6. 静默合并伤害的五种形态
 
-自动合并最危险的不是冲突，是「git 认为已解决、语法合法、语义被替换」。0.3.1 的 16 条全部落在这四类：
+自动合并最危险的不是冲突，是「git 认为已解决、语法合法、语义被替换」。0.3.1 的 17 条全部落在这五类：
 
 | 形态 | 症状 | 例子 | 检测手段 |
 |---|---|---|---|
 | 同一类体里重复方法/属性 | 后定义者胜，前一份成死代码 | `setSkins`（`player/basics.js`、`match/platform.js`）、`setHost`（`host/proxy.js`） | 类成员扫描；`eslint no-dupe-class-members` |
 | 对象字面量重复键 | 同上 | `skin:`（`render/app.js`、`app/info.js`、`match/views.js`） | `eslint no-dupe-keys` |
 | 一个函数体被拼进另一个函数体 | 引用本树里不存在的符号，运行时才炸 | `screens/stats.js` 的 `Overview`（引用 9 个不存在符号 + 4 个不存在的模块） | `eslint no-undef`、`npm run typecheck` |
+| **定义被整块删掉、调用方留着** | 属性访问不是 undeclared：语法、lint、类型检查全绿。运行时才抛 `x.y is not a function`，而且往往在**启动路径**上，一次打死整个应用 | `battle/runner.js` 的 `setCombatMetrics`：`screens/game.js` 还在推它，实现连同导出一起没了 → `/dev/game-mock.html` 首启即抛错、HUD 挂不上 → **95 个浏览器用例全部超时**，症状极像「素材没下」 | 静态扫描查「调用了但本侧没定义」的成员名；**必须跑一次浏览器 e2e** |
 | 缺失的语义片段（不是冲突，是漏行） | 逻辑上少一条路，测试覆盖不到才安静 | `startMatchWith` 丢了 `TEST_DISABLED` 复检；`studio/index.js` 少 `await`；`HEAVY_TYPES` 丢了两个仍在用的类型 | 逐条读非冲突文件的 diff + 端到端测试 |
 
 经验值：**冲突块本身只占这类问题的一小部分**，多数来自「两侧都改过、git 顺利合并」的文件。所以合完之后
 必须把**非冲突文件**也过一遍 diff，尤其是有大量增删的文件。
+
+第四种形态特别阴：它是唯一「`npm test` 全量绿、`npm run ci` 也绿，但应用根本起不来」的一类。成因通常是
+上游新增了一个 API，调用点落进了本侧保留的文件，而实现所在的文件被本侧整块覆盖。判断方法：拿上游的
+新增导出名单去本侧返回对象/`export` 里逐个对，缺的就补 —— 只看调用点存在与否不够。
 
 ---
 
@@ -146,13 +151,20 @@ match / lobby / net / public / Node 内置），**不是**模块是否存在。�
 | 7 | 一次跑完 CI：`npm run ci`（含起服冒烟 + `doctor`） | 十五分钟以上 |
 | 8 | 浏览器 e2e（默认跳过，见 `docs/TESTING_LOCAL.md`） | 分钟级/个 |
 
-两条硬规则：
+三条硬规则：
 
-- **不要在一个 shell 命令里连跑多个测试目录。** 0.3.1 那次用
-  `for d in content e2e golden match plugins; do node --test test/$d/*.test.js; done`，
-  `plugins` 报 24 个失败；单独跑是 508/508 全过 —— 端口与临时目录的残留会制造假失败。逐目录、分进程跑。
+- **不要在一个 shell 命令里连跑多个测试目录 —— 但要知道真正的原因。** 0.3.1 那次用
+  `for d in content e2e golden match plugins; do node --test test/$d/*.test.js; done`，`plugins` 报 24 个失败；
+  单独跑全过。当时的归因是「端口与临时目录的残留」，**2026-10-25 复跑证明这个归因是错的**：真因是宿主
+  注入的删除垫片，它按「轮」累计删除次数、到第 50 次就抛 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`；连跑多个目录
+  会很快攒到 50，而「单独跑」发生在计数还很低的时候。删掉那三个环境变量之后，同样的连跑一条红都没有
+  （`test/plugins` 48 个文件逐个跑 **0 红**）。所以规则保留、但按新理由执行：**先摘垫片，再谈粒度**。
+  详见 `docs/TESTING_LOCAL.md` §1.2。
 - **红的测试先看错误文本，再决定改代码还是改断言。** 0.3.1 里有 4 个失败是断言过时（实现是对的），
   1 个是我自己改反了语义，还有一批是环境造成的（缺素材导致超时）。
+- **宣布合并完成之前，必须跑一次浏览器 e2e**（第 8 阶）。`npm test` 1892 项全绿 + `npm run ci` 全绿，
+  仍然可能有「应用根本起不来」的缺陷（§6 第四种形态就是这么藏的）。跑之前先 `npm run build` ——
+  页面加载的是 `public/build` 的哈希产物，改完源码不重打包，看到的还是旧代码，白跑一轮。
 
 ---
 

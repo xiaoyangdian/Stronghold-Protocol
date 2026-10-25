@@ -21,6 +21,126 @@ npm run build        # Vite 打包到 public/build
 可选：本机装了《明日方舟》PC 客户端时，`node tools/setup.mjs --local` 可提取官方 3D 棋盘、官方战斗特效与
 部分图标；没有客户端不影响游玩，这几样会换成 2D 棋盘与相近样式的替代品。
 
+### 1.1 国内网络：为什么「GitHub 下载失败」以及怎么过
+
+先分清两种可能，症状一样但处方不同：
+
+- **只看到一行提示**：`[network] GitHub 下载失败；如需使用第三方镜像…` —— 这是**首次直连失败的一句
+  劝告**，不是中断。下载器还有 jsDelivr 后备，会自己继续。此时先看 `[files]` 行的 `ok=` 是否在涨。
+- **`err=` 猛涨而 `ok=` 不动**：真的走不通了，见下面。
+
+2026-10 这台机器的实测（有本地代理 `HTTPS_PROXY=http://127.0.0.1:2832`）：
+
+| 通道 | 结果 |
+|---|---|
+| `raw.githubusercontent.com` | DNS 失败（`ENOENT`），直连不通 |
+| `cdn.jsdelivr.net`（后备） | `ECONNRESET` |
+| `gh-proxy.com/<github url>` | 200，~0.6–1.3 s |
+
+也就是说 `direct` 模式的两条路都断，**只有镜像能下**。`tools/assets/env-proxy.mjs` 已经处理了代理本身
+（检测到 `HTTP(S)_PROXY` 会带 `NODE_USE_ENV_PROXY=1` 自我重启一次，需要 Node ≥ 22.21 或 ≥ 24），不必再去
+动 `NODE_OPTIONS`。所以缺的只是「换源」这一步。
+
+**配置（一次性，用户级，新开的终端才生效）**：
+
+```powershell
+setx SP_ASSET_SOURCE mirror
+```
+
+**关键：必须同时降并发。** 免费镜像会限流，默认 `--concurrency=16` 会瞬间打满并触发下载器自带的熔断
+（`MirrorPolicy`：镜像**连续失败 3 次**就在本次运行内彻底停用镜像，回落到那两条已断的路，于是
+`ok=0 err=数百`）。实测并发 16 全灭、并发 3 稳定：
+
+```bash
+node tools/fetch-assets.mjs --asset-source=mirror --concurrency=3
+```
+
+`--concurrency` 只认 `=N` 写法，写成 `--concurrency 3` 会报 `unknown option 3`。环境变量只影响源，不影响
+并发，所以这条命令行参数每次都得起手带上；`node tools/setup.mjs` 目前没有透传并发的开关。
+
+**自己校准镜像**（换 `SP_GITHUB_PROXY` 前先测，注意必须带 `NODE_USE_ENV_PROXY=1` 才等于下载器的真实
+环境，否则测出来的是「没走代理」的结果）：
+
+```bash
+NODE_USE_ENV_PROXY=1 node -e "
+const RAW='https://raw.githubusercontent.com/yuanyan3060/ArknightsGameResource/main/README.md';
+(async()=>{for(const p of ['https://gh-proxy.com/','https://ghfast.top/','https://ghproxy.net/']){
+  let ok=0;for(let i=0;i<4;i++){try{const r=await fetch(p+RAW,{signal:AbortSignal.timeout(8000)});if(r.ok)ok++;if(r.body)await r.body.cancel();}catch{}}
+  console.log(p,ok+'/4');}})();"
+```
+
+串行测起来都通不代表并发也能通 —— 2026-10 那次 `ghfast.top` 串行 4/4、并发 16 却 0/N。**只在降并发
+的条件下比较才有意义。**
+
+`SP_GITHUB_PROXY` 只写前缀（如 `https://ghfast.top/`，必须 https、不带 query）；**设成空字符串是「禁用
+代理」而不是「恢复默认」**，要恢复默认得删掉这个变量（`[Environment]::SetEnvironmentVariable('SP_GITHUB_PROXY',$null,'User')`）。
+
+### 1.2 在 WorkBuddy / CodeBuddy 里跑测试：两个会凭空造出红点的环境因素
+
+这两条都**不是仓库的问题**，但都会让 `npm test` 红一片，而且报错信息完全不指向真因。2026-10-25 全量复跑时
+就是先被它们骗了一轮（一度误判成「合并引入」）。
+
+**（一）删除垫片把「清临时目录」变成异常。** 宿主会给**每一个** node 子进程注入：
+
+```
+NODE_OPTIONS=--require="<WorkBuddy>/resources/app.asar.unpacked/cli/vendor/shim/node-language-shim.cjs"
+CODEBUDDY_SAFE_DELETE_BULK_GUARD=<…>/safe-delete-bulk-guard.cjs
+CODEBUDDY_SAFE_DELETE_SANDBOX=1
+```
+
+那个守卫按「轮」累计删除次数，**到第 50 次就抛**
+`[safe-delete][SAFE_DELETE_BULK_CONFIRM_REQUIRED] {"count":50,"threshold":50,…}`，抛在 `rimrafSync` 里。
+任何「建临时目录 → 断言 → 删掉」的用例都会在删的那一步炸，看起来像用例自己失败：
+
+| 文件 | 假失败数 |
+|---|---|
+| `test/plugins/forgeImport.test.js` | 9 |
+| `test/plugins/forgePanel.test.js` | 2 |
+| `test/plugins/fx.test.js` | 1 |
+| `test/studio/*` | 8（另有进程/符号链接相关的真实差异，见 §4） |
+
+同一次 `test/plugins/*.test.js` 单进程跑出 **33 个红**，逐文件跑仍然是这些文件红 —— 因为计数器是跨进程共享的
+（`scope:"turn"`），换进程也躲不掉。CI 没有这个垫片，所以要在本地得到可信结果，必须把这几个变量摘掉：
+
+```bash
+env -u NODE_OPTIONS -u CODEBUDDY_SAFE_DELETE_BULK_GUARD -u CODEBUDDY_SAFE_DELETE_SANDBOX \
+  node --test 'test/plugins/*.test.js'
+```
+
+```powershell
+# PowerShell：只影响这一次调用
+$env:NODE_OPTIONS=$null; $env:CODEBUDDY_SAFE_DELETE_BULK_GUARD=$null; $env:CODEBUDDY_SAFE_DELETE_SANDBOX=$null
+node --test test/plugins/*.test.js
+```
+
+摘掉之后 `test/plugins` 48 个文件 **0 红**。
+
+**（二）Node 小版本把几批用例推向相反方向。** 本机有两个 22.x，行为不一样：
+
+| | 22.22.2（WorkBuddy 托管，默认在 PATH 上） | 22.13.1（系统安装） |
+|---|---|---|
+| `test/plugins/{csp,contentBattle,dsl-data}`、`test/official-tables.test.js` | **进程退出时崩**，`exitCode 3221226505`（`0xC0000409` = `STATUS_STACK_BUFFER_OVERRUN`） | 正常，4/4 · 7/7 · 12/12 · 全绿 |
+| `test/assets-env-proxy.test.js` | 9/9 | **2 红** |
+| `test/ui/theme-notices.test.js` | 5/5 | **3 红** |
+
+崩溃的形态很容易认错：子用例**全部 `ok`**，失败的是文件级那条合成用例（`tests 1 / pass 0 / fail 1`），
+输出里**一条断言都没有**。`official-tables` 是更极端的一种：连子用例都没跑出来就崩。在 `git stash` 后的
+基线上同样崩，所以与改动无关。
+
+另外两类反过来：
+
+- `assets-env-proxy` 的 `envProxyPlan` 只在 **Node ≥ 22.21**（或 ≥ 24）才有「走代理」这一档，22.13.1 落在
+  「不转发、直接下载」分支，而用例断言的是**拒绝直连**那句 `Refusing to fetch directly`。
+- `ui/theme-notices` 依赖 `await new Promise(r => setTimeout(r, 0))` 这一个宏任务之内把主题变量落盘，
+  两个版本的微任务/宏任务交替与 `AbortSignal` 行为不同，22.13.1 上还没写进去就断言了。
+
+即：`package.json` 的 `engines.node` 写的是 `>=22`，实际隐含 **`>=22.21`**，而 22.22.2 又踩到崩溃。
+
+结论与做法：**默认用 22.22.2 跑全量，这 4 个崩溃文件单独用 22.13.1 跑**（它们正好是「不涉及本次改动」的
+四个：两个插件宿主、一个 DSL 数据、一个官方表格导入）。这样两边加起来是 0 红。想一条命令跑完就装一个
+22.21.x（既满足 ≥22.21 的代理语义，又不在这两个已知崩溃/时序差异里），本次未验证。
+真机（`npm start`）不受影响 —— 这些差异只在测试与下载器的代理判定里。
+
 ---
 
 ## 2. 启动

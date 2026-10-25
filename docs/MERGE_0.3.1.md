@@ -64,13 +64,43 @@
 - [x] `data/assets.json` 与 `data/config.json` 的取舍
 - [x] 版本号、CHANGELOG
 - [x] 验收：`npm run build`（7.1s，index 997 kB / gzip 343 kB）、`node tools/golden.mjs`（**288/288** 与基准一致）、`node --test`（根目录 1892 通过 / 0 失败，11 个子目录全绿，合计约 9.3k 项）、`node tools/doctor.mjs`（基本环境正常）
-- [ ] 浏览器冒烟：只做到 HTTP 层（`/`、`/build/index.html`、首屏 JS、`/data/chess.json`、`/js/asset-cdn.js`、`/css/screens/sweep.css` 全 200，服务端日志无 error）。
-  `SP_E2E=1 CHROME_PATH=… node --test test/ui/downed-plate.e2e.test.js` 试跑过一次：4 个用例全部停在
-  `Waiting for selector .gm__hud failed`（30 秒超时）。判定为**前置资源缺失** —— `public/assets` 为空
-  （约 720 MB 素材被 gitignore，本机未下载），而不是渲染逻辑坏了；错误发生在 mock 页面的 HUD 挂载之前，
-  与这次删除的 `DownedPlate` 无关。**素材就位后需要重跑这一组**，以及 `test/ui/*.e2e.test.js`（69 个）与
-  `test/render/*.browser.test.js`（26 个）里的其余用例。
-  真实渲染与联机对局仍需人工过一遍，检查表见 `docs/TESTING_LOCAL.md` §5。
+- [ ] 浏览器冒烟：**2026-10-25 补正** —— 原先这里记的「停在 `.gm__hud` 超时，判定为素材缺失」是**错的**。
+  素材补齐（722.7 MB / 16664 文件、`requiredMisses: 0`）之后重跑，症状一模一样；用 puppeteer 探针抓到真正的
+  第一现场是 `pageerror: battleRunner.setCombatMetrics is not a function`（见第 17 条），应用在挂 HUD 前就死了。
+  修好后 `downed-plate` **4/4 通过**，`__MOCK__` 正常、控制台零错误。
+  另外用堆栈探针挖出第 18 条（`operatorPortrait` 读旧键），修掉后 `text-scale` 从 0/2 变 1/2。
+  **仍然红的部分不是本次能收尾的**，分两类，见 §「浏览器用例的现状」。
+
+### 浏览器用例的现状（0.3.1 之后首次实跑，2026-10-25）
+
+历史原因：本机没有设 `CHROME_PATH`，95 个浏览器用例一直是**静默跳过**的，所以这些红是第一次被看见，不是本次新引入。
+实测（`SP_E2E=1 CHROME_PATH=…`，逐文件跑）：
+
+| 用例 | 结果 | 第一现场 |
+|---|---|---|
+| `downed-plate` | **4/4** | — |
+| `text-scale` | 1/2 | `the body text starts at the reported 7.2 px (6.5)` —— 断言过时，见下 |
+| `stats` | 1/8 | `nothing clickable for .mode-card "独立模拟"` |
+| `standin` | 0/1 | `Waiting for selector .lo .lo-tab[data-tab="ownership"] failed` |
+| `diy` | 0/4 | 同上（`data-tab="diy"`） |
+| `bond-audio` | 0/1 | `nothing clickable for .mode-card "独立模拟"` |
+
+**第一类：导航失配（约 27 个文件）。** `.mode-card` 这个选择器现在**只存在于 CSS**（`devices.css` 的移动端
+规则），`public/js` 两侧都没有生产者：0.3.1 把大厅换成了 hub 页（`hub-entry__name` → 「选择模拟协议」
+`proto-*` 屏 → 难度 → 开始）。本分支那批用例（`bond-audio`、`diy`、`devices`、`band-draft-skip`、
+`feedback1-offers` 等）仍按旧大厅的「点模式卡 → 点难度卡 → 创建」走，所以一进对局就卡住。
+`grep -rl "mode-card" test/` → 27 个文件；`lo-tab` 另有 4 个（`standin`、`diy` 等靠「进对局后开干员调配」，
+入口路径变了所以 `.lo` 根本没渲染）。
+这是**取上游大厅的直接代价**，和 sweep 那个取舍同源。收尾方式只有一条：把这批用例的导航助手改写成
+0.3.1 的 hub → proto 路径。工作量独立，不能混在合并里草草改。
+
+**第二类：像素断言过时（`text-scale` 的第一条）。** 它断言 `.set-row__label` = `0.18 × 40 = 7.2px`，
+实测量 6.5。原因是 `--utility-text = calc(var(--t) * var(--sp-ui-scale, 1))`
+（`utility-mobile.css:7`），而 `ui/managementScale.js` 按视口算 `unit = min(rem, w/19.2, h/10.8)`：
+844×390 时 `min(40, 43.96, 36.11) = 36.11`，`factor = 0.9028` → `0.18 × 40 × 0.9028 = 6.5`。
+这是 fork **有意**规定「工具界面用低于 40px 基准的本地单位」（那个文件头注释写得很清楚），
+且基线 `e01036ae` 里机制完全相同 —— **不是合并引入**。断言该改成按 `--sp-ui-scale` 推导，或改成量比例
+而非绝对值；本次没有动它，避免把断言改成同义反复。
 
 ### 数据文件的取舍（逐叶子比对）
 
@@ -145,6 +175,8 @@
 | 14 | `public/js/screens/stats.js` `Overview` | 上游的 总览 实现被整段拼进本分支的函数体，引用 `nickname`/`records`/`fonts`/`uiUrl`/`trophyMedalOf`/`unknownMode`/`ModdedSwitch`/`TitleHexagon`。上游那套还依赖 `RecordHeading`/`MatchRecords`/`BondAchievement`/`ui/titleHexagon.js`，这些模块本分支没有 → 保留本分支的 总览，删掉拼入片段 | 词法上全是「标识符」 |
 | 15 | `public/css/screens/title.css`、`public/css/screens/game.css` | 「按选择器取差集追加」把 0.3.0 已排除的素材包导入样式（`.title-assets`/`.asset-download*`/`.asset-import*`）、上游页脚仓库链接（`.title-repo`/`.title-foot__meta`）、以及本分支重复实现的下野板 `.downpl` 全块一起带了进来，全部无生产者 | CSS 无引用检查 |
 | 16 | `tools/fetch-assets.mjs` | 保留了 `buildPlan({ statsTemplate })` 的实参，却既没导入 `statsTemplateJobs` 也没定义它（`ReferenceError`）；本分支的统计页不消费这些官方素材，改为不传 | 只在跑抓取时炸 |
+| 17 | `public/js/battle/runner.js` | `setCombatMetrics` 的**实现整段丢失**，只剩调用方（`screens/game.js:151` 把设置推给它）和一句「…Omit it and call setCombatMetrics」的注释。后果是 `/dev/game-mock.html` 首次启动即抛 `battleRunner.setCombatMetrics is not a function`，HUD 挂不上、`__MOCK__` 不定义，于是**全部浏览器用例一起卡在「等待 `.gm__hud`」**——症状看起来极像「素材没下」。修复：补回上游 0.3.1 的 `metricsWanted` / `metricsEnabled()` / `detachCombat()` / `setCombatMetrics()`，**并保留 fork 对 Worker 主机的 `e.host.packet.combat` 读取**（上游那句 `metricsEnabled() && !e.host.remote` 会把 fork 的远程统计砍掉），返回对象里补 `setCombatMetrics,` | 定义被整块删掉、调用仍在；且**没有任何单测驱动 `rig({ pinMetrics: false })`**，`npm test` 1892 项全绿 |
+| 18 | `public/js/ui/operatorPortrait.js` | 该文件读 `skinsStore` 的旧键 `s.entries[chessId]`。`ui/skins.js` 已按 0.3.1 契约改成 `{ [SKINS_KEY]: { [charId]: skinId }, skinsSync }`，于是每次渲染头像都抛 `Cannot read properties of undefined (reading 'chess_char_…')`，由 `store.js` 的 selector 兜住并 `console.error` → 控制台刷屏、头像退回占位，**所有断言「控制台零错误」的用例一律红**。修复：键换成 `chess.charId`，读 `s[SKINS_KEY]`（`portraitSkin` 内部同样改用 charId，与服务端 `PlayerBasics.skinFor` / `players[].skins` 对齐）；该组件被 7 个界面用（diy / loadout / settle / detailPanel / resultAvatar / shopBar） | 旧键在 `skins.js` 里已不存在，但 selector 异常被 `try/catch` 吞掉并降级为 `undefined`，不报错、不白屏 |
 
 ### 皮肤键模型统一（0.3.1 契约）
 
@@ -170,4 +202,93 @@
 | `test/ui/skins.test.js` | 重写 | 原文件导入 `ui/skins.js:installSkinsSync`，0.3.1 把同步引擎收敛到 `ui/loadoutSync.js` 的 `installPrefSync`；选择器行、设置默认、`visibleSkin` 分别由 `test/ui/skin-picker.test.js`、`test/ui/gameLogic.test.js`、`test/skins-lifecycle.test.js` 覆盖。重写后只保留 `cleanSkins`/`freezeSkins` 的上限与原型键契约，并钉住同步引擎的归属 |
 | `test/ui/skin-picker-layout.test.js` 第 3 例 | 对齐新标记 | 0.3.1 把名称 / 系列画进格子、tooltip 改为「点击选择 / 点击放大预览」，`x.`/`chessId` 变量名也不再存在 |
 | `test/ui/playtest3.test.js`、`test/ui/standin-ui.test.js`、`test/ui/text-scale.test.js`、`test/resources/panel.test.js` | 陈旧断言对齐 | 分别对应：皮肤目录并入 `assets` 清单（没有独立 `skins` 文件）、skin 只在使用时才进渲染签名、`--ui-unit` 统一回 `rem`（同一文件里两条互斥断言只留一条）、`--ui-unit` 化的 `.title-preload` 偏移 |
+| `test/ui/skin-portraits.test.js` 第 2、3 例 | 改成 charId 键 | 与缺陷 18 同源：两处都按 chess id（`{ base: skin }`）写，而 0.3.1 的 `ui/skins.js` 与 `players[].skins` 都是 `{ [charId]: skinId }`。改后 8/8 |
+
+---
+
+## 验收实测（2026-10-25 全量复跑）
+
+素材下全之后（16664 文件 / 722.7 MB，`requiredMisses: 0`）重新跑了一遍全量。**先把三个环境因素摘掉**
+（删除垫片、Node 版本、并发跑测试），否则得到的红点全是假的 —— 详见 `docs/TESTING_LOCAL.md` §1.2。
+逐文件分进程跑（`test/plugins` = 48 个文件逐个起进程）：
+
+| 组 | 文件 | 用的 Node | tests | pass | fail | skip |
+|---|---|---|---|---|---|---|
+| `test/*.test.js` | 116 | 22.22.2 | 1907 | 1884 | **2** | 21 |
+| `content` | — | 22.22.2 | 2355 | 2355 | 0 | 0 |
+| `e2e` | 1 | 22.22.2 | 8 | 8 | 0 | 0 |
+| `match` | — | 22.22.2 | 1029 | 1027 | **0** | 2 |
+| `render` | — | 22.22.2 | 1041 | 1031 | 0 | 10 |
+| `plugins` | 48 | 22.13.1 | 508 | 508 | **0** | 0 |
+| `resources` | 17 | 22.13.1 | 201 | 200 | 0 | 1 |
+| `sim` | 119 | 22.13.1 | 933 | 930 | 0 | 3 |
+| `studio` | 18 | 22.13.1 | 252 | 250 | 0 | 2 |
+| `ui` | 196 | 22.13.1 → 22.22.2 | 1117 | 1102 | **0**（22.22.2） | 15 |
+
+约 9351 项，**2 红**，skip 全是需要浏览器 / `<CHROME_PATH>` 的用例。
+
+关于 `ui` 那一行的两个数：22.13.1 上 `test/ui/theme-notices.test.js` 3 红、`test/ui/skin-portraits.test.js`
+（本次改过，见上文）8/8 绿；换到 22.22.2 正好反过来 —— theme-notices 5/5、而 22.22.2 崩的是别的四个文件。
+`skin-portraits` 的 2 例已按 charId 键改完，在 22.22.2 上复验 8/8，所以 `ui` 在默认 Node 上是 **0 红**。
+同理 `test/plugins` 在 22.22.2 上不是「红」而是**三个文件崩**，在 22.13.1 上 508 项全绿。
+
+### 那一批「一跑就红」的，其实全是环境
+
+下面这些在**没摘垫片、没分版本、还并行跑着别的测试**的情况下都报过红，摘干净之后一条都没有：
+
+| 现象 | 假红数 | 真因 |
+|---|---|---|
+| `test/plugins/*` 整目录一条命令 | 33 | 删除垫片累计到 50 次抛 `SAFE_DELETE_BULK_CONFIRM_REQUIRED`，全部炸在清理临时目录那一步 |
+| `test/studio/*` | 8 | 同上 |
+| `test/match/sim-host` Worker overhead | 1 | 并行跑测试时 CPU 争抢：`overheadMsPerTick` 10.15 vs 单跑 **0.081**（差 126 倍） |
+| `test/match/plugin-host` 双次重启 | 1 | Websocket 握手 7s 超时，同上 |
+| `test/resources/*` sidecar symlink | 1 | 同上 |
+| `test/sim` best-of-3 性能 | 1 | 同上 |
+
+
+### 那 2 红是什么
+
+**① `test/official-tables.test.js` —— 不是本仓库的问题，是 Node 22.22.2 崩。**
+`exitCode 3221226505`（`0xC0000409`），子用例一个都没跑出来。同一个文件在 22.13.1 上全绿，`git stash`
+到基线（`a7b2d165`）同样崩。同族的还有 `test/plugins/{csp,contentBattle,dsl-data}`（这三个是**子用例全过、
+进程退出时崩**）。四个文件都与本次改动无关。
+
+**② `generated manifest data/assets.json` → `every manifest path exists on disk` —— 真问题，但不在这次去改。**
+
+清单里 16713 个路径有 **45 个在盘上不存在**：
+
+| 类别 | 数量 | 说明 |
+|---|---|---|
+| `/assets/ui/statistics/*` | 38 | 本分支的 `tools/fetch-assets.mjs` **故意不传 `statsTemplate`**（`screens/stats.js` 自绘），所以这 38 个永远不会下载 |
+| `/assets/enemy/icon/enemy_200{1,2}_…_2.png` 等 | 4 | 梗敌人的 `_2` 图标，上游 CDN 也没有；抓取计划把它们列在 `droppedLeaves` 里 |
+| `/assets/audio/sfx/player/{p_atk_staplegun_s,p_atk_javelinthrow_s,p_atk_richfan_s,p_imp_brightensword_s}.mp3` | 4 | 只有 `_n` 变体在盘上，`_s` 变体缺失 |
+
+**为什么不能就地重生成：** `data/assets.json` 与上游 `b3deebda` **逐字节相同**（合并时按「数据文件取上游」
+处理，见上文「数据文件的取舍」）。用本分支的输入重跑 `npm run assets`，`shrinkGuard` 会拦下写入
+（`manifestWritten: false`，`droppedEntries` 156 条 = 上面 45 条 + **111 条 audio.sfx**）。
+
+那 111 条不是缺文件 —— 是**计划根本不在产出它们**：它们既不在 `misses` 也不在 `droppedLeaves` 里。
+例如 `battle.ON_ABILITY_HIT.char_2026_yu.attack.3` 这个池子，缓存（`.cache/gamedata/excel/audio_data.json`）
+里**有**、盘上那个唯一的 `p_imp_frbytrtn_d.mp3` **也在**、已提交清单里**也有**，但重建时不会产出：`plan.mjs`
+对每个技能索引要求 `(o.skills || []).find(k => k.index === i)` 命中，而 `docs/research/03-operators.json`
+里 `char_2026_yu` 的两个 chess 记录 **`skills` 是空数组**（上游同一文件也一样）。也就是说**已提交的清单用
+仓库里现有的输入复现不出来** —— 上游多半是拿本地客户端抽取（`.cache/gamedata` / `data/local-assets.json`）
+生成的，那些输入不在仓库里。
+
+所以「重生成」会把 111 条音效池（941 → 830）**静默删掉**，`test/audio-pools-data.test.js` 里钉死的
+`refs === 952` / `pools === 941` 也会跟着红。那不是修好，是拿功能换绿灯。
+
+**真实影响（值得知道，但不阻塞）：** `tools/setup.mjs` 的 `checkAssets()` 只要清单里**有一个**路径不在盘上就
+返回 `ok: false`，于是每次 `npm run setup` 都会再跑一遍 `fetch-assets` 并提示「素材下载未完成」——
+哪怕 722 MB 全都下齐了。`doctor` / 启动器同理。
+
+**两条可选收尾（都要单独一次提交，不能混进合并）：**
+1. **外科式改清单**：手工删掉那 45 条叶子、重算 `stats.files` 与 `hash`，不碰 941 个池。改动最小、
+   `checkAssets` 立刻正常；代价是「生成物被手改」，下次谁重跑 `npm run assets` 又会退回去。
+2. **让生成侧补齐**：先查上游 `docs/research/03-operators.json` 的 `skills` 为什么是空的（是数据源就缺，
+   还是 `tools/asset-hashes.mjs` / 抽取脚本没跑），补上之后重生成才有意义，同时把
+   `audio-pools-data.test.js` 的两个计数改成与数据源一致的推导值而不是魔法数。
+
+在选之前不要动 `data/assets.json`。
+
 

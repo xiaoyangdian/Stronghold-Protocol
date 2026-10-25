@@ -11,7 +11,7 @@ import { SeatCardView } from '../../public/js/screens/room.js';
 import { cleanPlayerCard } from '../../shared/playerCard.js';
 import { store } from '../../public/js/store.js';
 import { settingsStore } from '../../public/js/ui/settings.js';
-import { skinsStore } from '../../public/js/ui/skins.js';
+import { skinsStore, SKINS_KEY } from '../../public/js/ui/skins.js';
 import { cardStore } from '../../public/js/ui/playerCard.js';
 import { installCardSync, setCardOperator } from '../../public/js/ui/playerCard.js';
 import { createStore, loadPref } from '../../public/js/store.js';
@@ -45,10 +45,12 @@ test('portrait helpers resolve installed skins and preserve normal/elite fallbac
 });
 
 test('gameplay portraits follow owner metadata, frozen unit skin and viewer opt-in; local choices never leak', () => {
-  const context = { settings: { skinsEnabled: true }, entries: { base: skin },
+  // Both maps are keyed by the OPERATOR (charId) after 0.3.1 — ui/skins.js states it, and the server agrees
+  // (PlayerBasics.skinFor → skinCharIdOf, players[].skins in publicView). `base` was the chess id: no longer read.
+  const context = { settings: { skinsEnabled: true }, entries: { [charId]: skin },
     state: { me: { playerId: 'me' }, match: { public: { players: [
-      { playerId: 'me', skins: { base: skin } }, { playerId: 'mate', skins: { base: mateSkin } },
-      { playerId: 'bot', isBot: true, skins: { base: skin } },
+      { playerId: 'me', skins: { [charId]: skin } }, { playerId: 'mate', skins: { [charId]: mateSkin } },
+      { playerId: 'bot', isBot: true, skins: { [charId]: skin } },
     ] } } } };
   assert.equal(portraitSkin(elite, context), skin);
   assert.equal(portraitSkin(elite, { ...context, ownerId: 'mate' }), mateSkin);
@@ -65,7 +67,9 @@ test('live portrait changes use subscribed state and a failed skin request has a
   const state = store.get(), prefs = settingsStore.get(), skins = skinsStore.get();
   t.after(() => { store.set(state); settingsStore.set(prefs); skinsStore.set(skins); });
   store.set({ me: { playerId: 'me' }, match: { public: null } });
-  skinsStore.set({ entries: { base: skin } }); settingsStore.set({ skinsEnabled: true });
+  // The store field is SKINS_KEY ('skins') and its value is { [charId]: skinId } — 0.3.1 replaced the
+  // `{ entries, sync }` store, so `{ entries: … }` here would write a field nothing reads.
+  skinsStore.set({ [SKINS_KEY]: { [charId]: skin } }); settingsStore.set({ skinsEnabled: true });
   const view = render(OperatorPortrait, { m, chess: elite, class: 'art' });
   assert.equal(view.props.src, '/assets/summer.png');
   assert.equal(view.props.fallback.props.src, '/assets/elite.png');

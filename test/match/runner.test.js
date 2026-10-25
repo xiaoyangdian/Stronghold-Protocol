@@ -545,3 +545,29 @@ test('live unit stats (user playtest #4 item 7): unitStats(id) reads the battle 
   assert.equal(r.runner.unitIdOf(ally.uid, ally.ownerId), null);
   r.runner.dispose();
 });
+
+// 「设置 → 作战统计」是 0.3.1 的开关：默认关，由 screens/game.js 启动时调 setCombatMetrics 推上来。合并时这个
+// 方法的**实现被整段删掉、调用方留着**，于是 /dev/game-mock.html 首次启动就抛
+// `battleRunner.setCombatMetrics is not a function`，HUD 挂不上、__MOCK__ 不定义 —— 全部浏览器用例一起卡在
+// 「等待 .gm__hud」，症状看起来极像「素材没下」。这条用例钉住它（docs/MERGE_0.3.1.md 第 17 条）：
+// 方法必须在，默认不挂表，打开后下一场战斗才挂，关掉立即摘。
+test('作战统计 is opt-in: setCombatMetrics exists, off by default, attaches only after it is switched on', async () => {
+  const start = realStart(7313);
+  const ownerId = start.spec.players[0].playerId;
+
+  const off = rig({ pinMetrics: false });
+  assert.equal(typeof off.runner.setCombatMetrics, 'function', 'the settings screen pushes this at boot');
+  await off.runner.onStart(structuredClone(start));
+  off.advance(5000, 50);
+  assert.equal(off.runner.combatMetrics({ scope: 'battle', ownerId }).rows.length, 0, 'default off: nothing is tracked');
+  off.runner.dispose();
+
+  const on = rig({ pinMetrics: false });
+  on.runner.setCombatMetrics(true);
+  await on.runner.onStart(structuredClone(start));
+  on.advance(5000, 50);
+  assert.ok(on.runner.combatMetrics({ scope: 'battle', ownerId }).rows.length > 0, 'switched on: the meter attaches');
+  on.runner.setCombatMetrics(false);
+  assert.equal(on.runner.combatMetrics({ scope: 'battle', ownerId }).rows.length, 0, 'switched off: detached at once');
+  on.runner.dispose();
+});
